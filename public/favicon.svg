@@ -1,0 +1,4 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img" aria-label="RoundEdge">
+  <rect width="64" height="64" rx="14" fill="#12121c"/>
+  <path d="M50 14H30A16 16 0 0 0 14 30v20h36z" fill="none" stroke="#863bff" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

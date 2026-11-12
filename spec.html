@@ -1,0 +1,765 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>RoundEdge — Specyfikacja Aplikacji do Zaokrąglania Krawędzi 3D</title>
+<style>
+  :root {
+    --bg: #0a0a0f;
+    --bg-2: #14141c;
+    --bg-3: #1e1e2a;
+    --fg: #e8e8ed;
+    --fg-dim: #9090a0;
+    --accent: #00d4aa;
+    --accent-2: #ff6b4a;
+    --accent-3: #7c5cff;
+    --border: #2a2a3a;
+    --code-bg: #0d0d14;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html { scroll-behavior: smooth; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Inter', 'Segoe UI', sans-serif;
+    background: var(--bg);
+    color: var(--fg);
+    line-height: 1.6;
+    font-size: 16px;
+  }
+  .container { max-width: 1100px; margin: 0 auto; padding: 0 24px; }
+
+  /* NAV */
+  nav {
+    position: sticky; top: 0; z-index: 100;
+    background: rgba(10, 10, 15, 0.85);
+    backdrop-filter: blur(12px);
+    border-bottom: 1px solid var(--border);
+    padding: 16px 0;
+  }
+  nav .container { display: flex; justify-content: space-between; align-items: center; }
+  .logo { font-weight: 700; font-size: 20px; color: var(--accent); letter-spacing: -0.5px; }
+  .logo span { color: var(--fg-dim); font-weight: 400; font-size: 14px; margin-left: 8px; }
+  nav ul { display: flex; gap: 24px; list-style: none; }
+  nav a { color: var(--fg-dim); text-decoration: none; font-size: 14px; transition: color 0.2s; }
+  nav a:hover { color: var(--accent); }
+
+  /* HERO */
+  .hero {
+    padding: 80px 0 60px;
+    background: radial-gradient(ellipse at top, rgba(0, 212, 170, 0.12) 0%, transparent 60%);
+  }
+  .hero h1 {
+    font-size: clamp(40px, 6vw, 64px);
+    font-weight: 800;
+    letter-spacing: -2px;
+    line-height: 1.05;
+    margin-bottom: 24px;
+  }
+  .hero h1 .gradient {
+    background: linear-gradient(135deg, var(--accent) 0%, var(--accent-3) 100%);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+  }
+  .hero .tagline {
+    font-size: 20px; color: var(--fg-dim); max-width: 700px; margin-bottom: 32px;
+  }
+  .hero .meta {
+    display: flex; gap: 24px; flex-wrap: wrap; padding: 16px 0;
+    border-top: 1px solid var(--border); border-bottom: 1px solid var(--border);
+    font-size: 13px; color: var(--fg-dim);
+  }
+  .hero .meta span strong { color: var(--fg); font-weight: 600; }
+
+  /* TL;DR */
+  .tldr {
+    background: var(--bg-2);
+    border: 1px solid var(--border);
+    border-left: 4px solid var(--accent);
+    padding: 24px 32px;
+    border-radius: 4px;
+    margin: 40px 0;
+  }
+  .tldr h2 { font-size: 18px; color: var(--accent); margin-bottom: 12px; text-transform: uppercase; letter-spacing: 1px; }
+  .tldr p { font-size: 17px; }
+
+  /* SECTIONS */
+  section { padding: 60px 0; border-top: 1px solid var(--border); }
+  section h2 {
+    font-size: 36px; font-weight: 700; letter-spacing: -1px;
+    margin-bottom: 8px; padding-top: 20px;
+  }
+  section h2 .num {
+    color: var(--accent); font-size: 14px; font-weight: 600;
+    display: inline-block; margin-right: 16px; letter-spacing: 1px;
+    vertical-align: middle;
+  }
+  section h3 { font-size: 22px; margin: 32px 0 12px; color: var(--fg); }
+  section h4 { font-size: 17px; margin: 20px 0 8px; color: var(--accent); }
+  section p { color: var(--fg-dim); margin-bottom: 12px; }
+  section ul, section ol { color: var(--fg-dim); margin-left: 24px; margin-bottom: 16px; }
+  section li { margin-bottom: 6px; }
+  section strong { color: var(--fg); font-weight: 600; }
+
+  /* TABLES */
+  table {
+    width: 100%; border-collapse: collapse;
+    margin: 16px 0;
+    background: var(--bg-2);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    overflow: hidden;
+  }
+  th, td {
+    padding: 12px 16px; text-align: left;
+    border-bottom: 1px solid var(--border);
+    font-size: 14px;
+  }
+  th { background: var(--bg-3); color: var(--fg); font-weight: 600; font-size: 13px; text-transform: uppercase; letter-spacing: 0.5px; }
+  td { color: var(--fg-dim); }
+  td strong { color: var(--fg); }
+  tr:last-child td { border-bottom: none; }
+  tr:hover td { background: rgba(255,255,255,0.02); }
+
+  /* CODE */
+  pre, code {
+    font-family: 'JetBrains Mono', 'Menlo', monospace;
+    background: var(--code-bg);
+    border: 1px solid var(--border);
+  }
+  code { padding: 2px 6px; border-radius: 3px; font-size: 13px; }
+  pre {
+    padding: 20px; border-radius: 6px;
+    overflow-x: auto;
+    margin: 16px 0;
+    font-size: 13px; line-height: 1.6;
+  }
+  pre code { background: none; padding: 0; border: none; }
+
+  /* USER FLOW DIAGRAM */
+  .flow {
+    display: flex; flex-direction: column; gap: 16px;
+    margin: 24px 0;
+  }
+  .flow-step {
+    background: var(--bg-2);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 20px 24px;
+    position: relative;
+  }
+  .flow-step::before {
+    content: '▼'; position: absolute; bottom: -22px; left: 50%;
+    transform: translateX(-50%); color: var(--accent); font-size: 14px;
+  }
+  .flow-step:last-child::before { display: none; }
+  .flow-step .step-num {
+    display: inline-block;
+    background: var(--accent);
+    color: var(--bg);
+    font-weight: 700;
+    font-size: 12px;
+    padding: 4px 10px;
+    border-radius: 3px;
+    margin-bottom: 8px;
+  }
+  .flow-step h4 { color: var(--accent); margin-top: 0; margin-bottom: 8px; font-size: 18px; }
+  .flow-step ul { margin-left: 20px; }
+  .flow-step:last-child { background: linear-gradient(135deg, var(--bg-2) 0%, rgba(0, 212, 170, 0.05) 100%); }
+
+  /* CALLOUTS */
+  .callout {
+    padding: 16px 20px;
+    border-radius: 4px;
+    margin: 16px 0;
+    font-size: 14px;
+  }
+  .callout.info { background: rgba(124, 92, 255, 0.1); border-left: 4px solid var(--accent-3); }
+  .callout.warning { background: rgba(255, 107, 74, 0.1); border-left: 4px solid var(--accent-2); }
+  .callout.success { background: rgba(0, 212, 170, 0.1); border-left: 4px solid var(--accent); }
+  .callout strong { color: var(--fg); }
+
+  /* ARCHITECTURE DIAGRAM */
+  .arch-diagram {
+    background: var(--bg-2);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 32px;
+    margin: 24px 0;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 12px;
+    line-height: 1.4;
+    overflow-x: auto;
+    white-space: pre;
+    color: var(--fg-dim);
+  }
+  .arch-diagram .accent { color: var(--accent); }
+  .arch-diagram .accent2 { color: var(--accent-3); }
+  .arch-diagram .accent3 { color: var(--accent-2); }
+  .arch-diagram .dim { color: var(--fg-dim); opacity: 0.5; }
+
+  /* GRID CARDS */
+  .grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+    gap: 16px;
+    margin: 24px 0;
+  }
+  .card {
+    background: var(--bg-2);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 20px;
+    transition: border-color 0.2s;
+  }
+  .card:hover { border-color: var(--accent); }
+  .card .prio {
+    display: inline-block;
+    font-size: 11px; font-weight: 700;
+    padding: 2px 8px;
+    border-radius: 3px;
+    margin-bottom: 8px;
+    text-transform: uppercase; letter-spacing: 0.5px;
+  }
+  .prio.p0 { background: var(--accent-2); color: white; }
+  .prio.p1 { background: var(--accent-3); color: white; }
+  .prio.p2 { background: var(--bg-3); color: var(--fg-dim); border: 1px solid var(--border); }
+  .card h4 { margin-top: 0; font-size: 16px; color: var(--fg); }
+  .card p { font-size: 14px; margin-bottom: 0; }
+
+  /* FOOTER */
+  footer {
+    padding: 40px 0;
+    border-top: 1px solid var(--border);
+    color: var(--fg-dim);
+    font-size: 13px;
+    text-align: center;
+  }
+
+  /* RESPONSIVE */
+  @media (max-width: 768px) {
+    nav ul { display: none; }
+    .hero { padding: 40px 0; }
+    section { padding: 40px 0; }
+    section h2 { font-size: 28px; }
+    .arch-diagram { font-size: 10px; padding: 16px; }
+  }
+</style>
+</head>
+<body>
+
+<nav>
+  <div class="container">
+    <div class="logo">RoundEdge <span>Specyfikacja v1.0</span></div>
+    <ul>
+      <li><a href="#tl-dr">TL;DR</a></li>
+      <li><a href="#proces">User Flow</a></li>
+      <li><a href="#architektura">Architektura</a></li>
+      <li><a href="#funkcje">Funkcje</a></li>
+      <li><a href="#roadmap">Roadmap</a></li>
+    </ul>
+  </div>
+</nav>
+
+<div class="hero">
+  <div class="container">
+    <h1>Webowa apka do<br><span class="gradient">zaokrąglania krawędzi 3D</span><br>pod druk 3D</h1>
+    <p class="tagline">Pełna specyfikacja produktowo-techniczna: problem, user flow, stack, funkcje, roadmap. Gotowe do wdrożenia.</p>
+    <div class="meta">
+      <span><strong>Wersja:</strong> 1.0 (MVP)</span>
+      <span><strong>Data:</strong> 2026-06-27</span>
+      <span><strong>Stack:</strong> React + Three.js + FastAPI + MeshLib</span>
+      <span><strong>Status:</strong> Gotowe do realizacji</span>
+    </div>
+  </div>
+</div>
+
+<div class="container">
+
+  <!-- TL;DR -->
+  <section id="tl-dr">
+    <div class="tldr">
+      <h2>TL;DR</h2>
+      <p><strong>RoundEdge</strong> to webowa aplikacja, która pozwala osobom bez wiedzy technicznej o CAD/meshopracowaniu wgrać model 3D (STL/OBJ/3MF), zaznaczyć krawędzie do zaokrąglenia i otrzymać zoptymalizowany plik gotowy do druku 3D — z automatycznym doborem parametrów pod kątem m.in. wytrzymałości, redukcji naprężeń i jakości powierzchni.</p>
+      <p style="margin-top:12px"><strong>Analogia:</strong> tak jak Canva uprościła grafikę, tak RoundEdge upraszcza przygotowanie modelu do druku 3D.</p>
+      <p style="margin-top:12px; color:var(--accent); font-weight:600">🎯 Obietnica: „Wgraj model → zaznacz krawędzie → pobierz zoptymalizowany STL w 2 minuty."</p>
+    </div>
+  </section>
+
+  <!-- PROBLEM -->
+  <section>
+    <h2><span class="num">01</span>Dlaczego zaokrąglanie krawędzi ma znaczenie</h2>
+
+    <p>Ostre krawędzie w modelach 3D to jeden z głównych powodów problemów w druku 3D. Na podstawie źródeł (Pollen AM, BigRep, Markforged, DfAM guides):</p>
+
+    <table>
+      <thead>
+        <tr><th>Powód</th><th>Mechanizm</th></tr>
+      </thead>
+      <tbody>
+        <tr><td><strong>Redukcja naprężeń</strong></td><td>Ostre narożniki wewnętrzne to koncentratory naprężeń — zaokrąglenie (nawet 2 mm) znacząco zwiększa wytrzymałość</td></tr>
+        <tr><td><strong>Jakość powierzchni</strong></td><td>Ostre krawędzie zewnętrzne powodują drgania głowicy i artefakty</td></tr>
+        <tr><td><strong>Mniej wsparć</strong></td><td>Zaokrąglone krawędzie poprawiają overhangi, mniej potrzeba supportów</td></tr>
+        <tr><td><strong>Mocniejsze delikatne elementy</strong></td><td>Cienkie wypusty (np. uchwyty) łączone zaokrągleniem są 2-3× mocniejsze</td></tr>
+        <tr><td><strong>Estetyka</strong></td><td>Detale wyglądają profesjonalnie, łatwiej zdjąć supporty</td></tr>
+        <tr><td><strong>Bezpieczeństwo</strong></td><td>Brak ostrych kantów = bezpieczniejsze użytkowanie (zabawki, uchwyty)</td></tr>
+      </tbody>
+    </table>
+
+    <h3>Luka rynkowa</h3>
+    <table>
+      <thead>
+        <tr><th>Narzędzie</th><th>Edge rounding</th><th>Problem dla laika</th></tr>
+      </thead>
+      <tbody>
+        <tr><td><strong>Blender (Bevel)</strong></td><td>✅ Zaawansowane</td><td>Stroma krzywa uczenia</td></tr>
+        <tr><td><strong>Fusion 360 / SolidWorks</strong></td><td>✅ Najlepsza jakość</td><td>Płatne; wymaga CAD; tylko bryły</td></tr>
+        <tr><td><strong>Meshmixer (Make Solid)</strong></td><td>⚠️ Voxel remeshing</td><td>UI archaiczne; niszczy geometrię</td></tr>
+        <tr><td><strong>PrusaSlicer / Bambu</strong></td><td>❌ Brak</td><td>Tylko przygotowanie G-code</td></tr>
+        <tr><td><strong>Online (Makeprintable)</strong></td><td>⚠️ Tylko naprawa</td><td>Brak selektywnego zaokrąglania</td></tr>
+        <tr><td><strong>RoundEdge (ta apka)</strong></td><td>✅ Selektywne, webowe</td><td>👈 Cel projektu</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <!-- USER FLOW -->
+  <section id="proces">
+    <h2><span class="num">02</span>Proces użycia — User Flow</h2>
+
+    <h3>Profesjonaliści vs. RoundEdge</h3>
+
+    <div class="callout info">
+      <strong>Profesjonalny flow (Blender):</strong> Import STL → sprawdź manifold → konwersja do siatki → edge select mode → bevel tool → adjust narożników → sprawdź non-manifold → re-eksport. <em>Czas: 30-90 minut, wymaga wiedzy.</em>
+    </div>
+
+    <div class="callout success">
+      <strong>RoundEdge flow:</strong> Wgraj plik → zaznacz krawędzie (klik) → wybierz preset → „Zaokrąglij" → pobierz STL. <em>Czas: 2-3 minuty, zero wiedzy technicznej.</em>
+    </div>
+
+    <h3>Szczegółowy flow — ekran po ekranie</h3>
+
+    <div class="flow">
+      <div class="flow-step">
+        <span class="step-num">EKRAN 1</span>
+        <h4>Upload</h4>
+        <ul>
+          <li>Drag &amp; drop STL / OBJ / 3MF (max 50 MB w MVP)</li>
+          <li>Walidacja: czy to poprawny mesh?</li>
+          <li>Miniaturka z liczbą trójkątów, rozmiarem w mm</li>
+          <li>Wykrywanie potencjalnych problemów (preview)</li>
+        </ul>
+      </div>
+
+      <div class="flow-step">
+        <span class="step-num">EKRAN 2</span>
+        <h4>Selekcja krawędzi</h4>
+        <ul>
+          <li>Interaktywny viewer 3D (obrót, zoom, pan)</li>
+          <li><strong>Tryby selekcji:</strong></li>
+          <li>Klik — pojedyncza krawędź</li>
+          <li>Ctrl+klik — dodaj do zaznaczenia</li>
+          <li>Drag — krawędzie w obszarze (fence selection)</li>
+          <li><strong>🪄 „Auto-detect"</strong> — automatycznie zaznacz wszystkie ostre krawędzie (>X stopni) — feature-killer w MVP</li>
+          <li>Podświetlenie zaznaczonych (kolor/highlight)</li>
+          <li>Licznik: „Zaznaczono: 47 krawędzi"</li>
+          <li>Sugestie: „Wykryto 23 ostre krawędzie >60° — zaznaczyć?"</li>
+        </ul>
+      </div>
+
+      <div class="flow-step">
+        <span class="step-num">EKRAN 3</span>
+        <h4>Parametry zaokrąglenia</h4>
+        <ul>
+          <li><strong>Presety</strong> (kafelki z ikonami): 🛡 Wytrzymałe · ✨ Estetyczne · ⚡ Szybkie · ⚙ Custom</li>
+          <li><strong>Custom:</strong></li>
+          <li>Suwak promienia: 0.1 — 10 mm</li>
+          <li>Typ: ○ Fillet (okrągły) · ▱ Chamfer (ścięty)</li>
+          <li>Liczba segmentów (preview wpływa na gładkość)</li>
+          <li><strong>Live preview:</strong> overlay przed/po z przezroczystością</li>
+          <li>Statystyki: przyrost trójkątów, estymowany czas druku</li>
+          <li>Ostrzeżenia: „Ten promień jest za duży dla wybranych krawędzi"</li>
+        </ul>
+      </div>
+
+      <div class="flow-step">
+        <span class="step-num">EKRAN 4</span>
+        <h4>Processing (asynchroniczny)</h4>
+        <ul>
+          <li>Pasek postępu: ▓▓▓▓▓▓▓░░░ 67%</li>
+          <li>Etapy widoczne dla użytkownika:</li>
+          <li>✓ Walidacja mesha</li>
+          <li>✓ Analiza topologii krawędzi</li>
+          <li>▓ Zaokrąglanie (47/47 krawędzi)</li>
+          <li>○ Naprawa topologii</li>
+          <li>○ Eksport</li>
+          <li>Przybliżony czas pozostały</li>
+        </ul>
+      </div>
+
+      <div class="flow-step">
+        <span class="step-num">EKRAN 5</span>
+        <h4>Wynik</h4>
+        <ul>
+          <li>Podgląd 3D z obracaniem</li>
+          <li>Porównanie przed/po (slider overlay)</li>
+          <li>Statystyki: Trójkąty: 12 432 → 18 941 (+52%)</li>
+          <li>Diagnostyka: ✓ Manifold · ✓ Brak non-manifold · ✓ Brak samoprzecięć</li>
+          <li>Akcje: 📥 Pobierz STL · 📥 Pobierz 3MF · 🔄 Cofnij zmiany · 📤 Wyślij do drukarki</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <!-- ARCHITEKTURA -->
+  <section id="architektura">
+    <h2><span class="num">03</span>Architektura techniczna</h2>
+
+    <h3>Stack technologiczny</h3>
+
+    <table>
+      <thead>
+        <tr><th>Warstwa</th><th>Technologia</th><th>Po co</th></tr>
+      </thead>
+      <tbody>
+        <tr><td><strong>Frontend</strong></td><td>React 18 + TypeScript + Vite</td><td>Komponenty, typowanie, szybki bundler</td></tr>
+        <tr><td><strong>3D Viewer</strong></td><td>Three.js + React Three Fiber</td><td>Interaktywny rendering w przeglądarce</td></tr>
+        <tr><td><strong>Akceleracja selekcji</strong></td><td>three-mesh-bvh</td><td>Szybki raycasting na krawędziach (kluczowe dla UX)</td></tr>
+        <tr><td><strong>UI Components</strong></td><td>Tailwind CSS + shadcn/ui</td><td>Nowoczesny, dostępny design system</td></tr>
+        <tr><td><strong>Backend API</strong></td><td>Python 3.11 + FastAPI</td><td>Async REST API</td></tr>
+        <tr><td><strong>Mesh processing</strong></td><td>MeshLib (Python SDK)</td><td>Najlepsza biblioteka open-source do mesh</td></tr>
+        <tr><td><strong>I/O plików</strong></td><td>trimesh</td><td>STL/OBJ/3MF parsing, naprawa topologii</td></tr>
+        <tr><td><strong>Job Queue</strong></td><td>Celery + Redis</td><td>Asynchroniczne przetwarzanie</td></tr>
+        <tr><td><strong>Storage</strong></td><td>S3 / Cloudflare R2</td><td>Pliki użytkowników</td></tr>
+        <tr><td><strong>Database</strong></td><td>PostgreSQL</td><td>Użytkownicy, historia jobów</td></tr>
+        <tr><td><strong>DevOps</strong></td><td>Docker + GitHub Actions</td><td>Konteneryzacja, CI/CD</td></tr>
+      </tbody>
+    </table>
+
+    <h3>Diagram architektury</h3>
+    <div class="arch-diagram"><span class="dim">┌──────────────┐</span>         <span class="dim">┌──────────────────────────┐</span>
+<span class="dim">│</span>   <span class="accent">Browser</span>    <span class="dim">│ ──────►</span> <span class="dim">│</span>  <span class="accent2">CDN (Cloudflare)</span>        <span class="dim">│</span>
+<span class="dim">│</span>  (React +    <span class="dim">│</span>         <span class="dim">│</span>  / Static frontend       <span class="dim">│</span>
+<span class="dim">│</span>   Three.js)  <span class="dim">│</span>         <span class="dim">└──────────────────────────┘</span>
+<span class="dim">└──────┬───────┘</span>                      <span class="dim">│</span>
+       <span class="dim">│ HTTPS</span>                        <span class="dim">▼</span>
+       <span class="dim">│</span>                       <span class="dim">┌──────────────┐</span>
+       <span class="dim">│</span>                       <span class="dim">│</span>  <span class="accent">React App</span>   <span class="dim">│</span>
+       <span class="dim">│</span>                       <span class="dim">│</span>  (Vite build)<span class="dim">│</span>
+       <span class="dim">│</span>                       <span class="dim">└──────┬───────┘</span>
+       <span class="dim">│</span>                              <span class="dim">│</span>
+       <span class="dim">▼</span>                              <span class="dim">▼</span>
+<span class="dim">┌──────────────────────────────────────────────────┐</span>
+<span class="dim">│</span>              <span class="accent3">FastAPI Backend</span>                     <span class="dim">│</span>
+<span class="dim">│</span>  <span class="dim">┌─────────────────────────────────────────┐</span>     <span class="dim">│</span>
+<span class="dim">│</span>  <span class="dim">│</span> /upload  → S3 storage, validation       <span class="dim">│</span>     <span class="dim">│</span>
+<span class="dim">│</span>  <span class="dim">│</span> /jobs    → enqueue to Redis             <span class="dim">│</span>     <span class="dim">│</span>
+<span class="dim">│</span>  <span class="dim">│</span> /jobs/:id/status → poll                <span class="dim">│</span>     <span class="dim">│</span>
+<span class="dim">│</span>  <span class="dim">│</span> /jobs/:id/result → download            <span class="dim">│</span>     <span class="dim">│</span>
+<span class="dim">│</span>  <span class="dim">└─────────────────────────────────────────┘</span>     <span class="dim">│</span>
+<span class="dim">└──────────────┬───────────────────────────────────┘</span>
+               <span class="dim">│</span>
+               <span class="dim">▼</span>
+        <span class="dim">┌──────────────┐</span>         <span class="dim">┌──────────────────┐</span>
+        <span class="dim">│</span>  <span class="accent">Redis Queue</span> <span class="dim">│ ──────►</span> <span class="dim">│</span>  <span class="accent2">Celery Workers</span>  <span class="dim">│</span>
+        <span class="dim">│</span>              <span class="dim">│</span>         <span class="dim">│</span>  (Python)        <span class="dim">│</span>
+        <span class="dim">└──────────────┘</span>         <span class="dim">│</span>                  <span class="dim">│</span>
+                                 <span class="dim">│</span>  <span class="accent3">1. MeshLib load</span> <span class="dim">│</span>
+                                 <span class="dim">│</span>  <span class="accent3">2. Detect edges</span> <span class="dim">│</span>
+                                 <span class="dim">│</span>  <span class="accent3">3. Apply fillet</span> <span class="dim">│</span>
+                                 <span class="dim">│</span>  <span class="accent3">4. Validate</span>     <span class="dim">│</span>
+                                 <span class="dim">│</span>  <span class="accent3">5. Export STL</span>   <span class="dim">│</span>
+                                 <span class="dim">│</span>                  <span class="dim">│</span>
+                                 <span class="dim">│</span>  Output → S3      <span class="dim">│</span>
+                                 <span class="dim">└──────────────────┘</span>
+                                          <span class="dim">│</span>
+                                          <span class="dim">▼</span>
+                                 <span class="dim">┌──────────────────┐</span>
+                                 <span class="dim">│</span>   <span class="accent2">PostgreSQL</span>     <span class="dim">│</span>
+                                 <span class="dim">│</span>  - users         <span class="dim">│</span>
+                                 <span class="dim">│</span>  - jobs          <span class="dim">│</span>
+                                 <span class="dim">│</span>  - files_meta    <span class="dim">│</span>
+                                 <span class="dim">└──────────────────┘</span></div>
+
+    <h3>Algorytm — pipeline przetwarzania</h3>
+    <pre><code># Pseudokod pipeline'u przetwarzania (worker)
+
+from meshlib import mrmeshpy as mm
+
+def round_edges(input_path, selected_edges, radius_mm, fillet_type):
+    # 1. Load mesh
+    mesh = mm.loadMesh(input_path)
+
+    # 2. Validate &amp; repair
+    if not is_manifold(mesh):
+        mesh = repair_topology(mesh)
+
+    # 3. Detect selected edges (by user click indices)
+    edges = find_edges_by_indices(mesh, selected_edges)
+
+    # 4. Apply fillet / bevel
+    if fillet_type == "fillet":
+        settings = mm.MeshFillerSettings()
+        settings.maxEdgeLen = radius_mm * 0.5  # adaptive
+        result = mm.fillEdges(mesh, edges, settings)
+    elif fillet_type == "chamfer":
+        result = mm.bevelEdges(mesh, edges, radius_mm)
+
+    # 5. Cleanup
+    result = mm.selfIntersections(result).fix()
+
+    # 6. Validate output
+    assert is_manifold(result)
+    assert not has_non_manifold_edges(result)
+
+    # 7. Export
+    mm.saveMesh(result, output_path)
+    return output_path</code></pre>
+
+    <div class="callout info">
+      <strong>Dlaczego MeshLib?</strong> Open-source, aktywnie rozwijany, ma bezpośrednie API do fillet/bevel edges, najszybszy w swojej klasie (C++ core + Python bindings).
+    </div>
+  </section>
+
+  <!-- FUNKCJE -->
+  <section id="funkcje">
+    <h2><span class="num">04</span>Funkcjonalności — pełna lista</h2>
+
+    <h3>MVP (Faza 1, 8-12 tygodni)</h3>
+    <div class="grid">
+      <div class="card">
+        <span class="prio p0">P0</span>
+        <h4>Upload STL/OBJ/3MF</h4>
+        <p>Drag &amp; drop, walidacja, limit 50 MB</p>
+      </div>
+      <div class="card">
+        <span class="prio p0">P0</span>
+        <h4>Viewer 3D</h4>
+        <p>Obrót, zoom, pan, podświetlenie krawędzi</p>
+      </div>
+      <div class="card">
+        <span class="prio p0">P0</span>
+        <h4>Selekcja krawędzi (klik)</h4>
+        <p>Pojedyncza krawędź, multi-select, fence selection</p>
+      </div>
+      <div class="card">
+        <span class="prio p0">P0</span>
+        <h4>Auto-detect ostrych krawędzi</h4>
+        <p>Kąt &gt; 60° domyślnie, regulowany — game changer w UX</p>
+      </div>
+      <div class="card">
+        <span class="prio p0">P0</span>
+        <h4>Fillet (zaokrąglenie okrągłe)</h4>
+        <p>Suwak promienia 0.1-10 mm</p>
+      </div>
+      <div class="card">
+        <span class="prio p0">P0</span>
+        <h4>Chamfer (ścięcie)</h4>
+        <p>Suwak rozmiaru 0.1-10 mm</p>
+      </div>
+      <div class="card">
+        <span class="prio p0">P0</span>
+        <h4>Live preview</h4>
+        <p>Overlay przed/po z przezroczystością</p>
+      </div>
+      <div class="card">
+        <span class="prio p0">P0</span>
+        <h4>Processing async</h4>
+        <p>Job queue, status polling, ETA</p>
+      </div>
+      <div class="card">
+        <span class="prio p0">P0</span>
+        <h4>Download STL/3MF</h4>
+        <p>Wynik gotowy do druku</p>
+      </div>
+      <div class="card">
+        <span class="prio p0">P0</span>
+        <h4>Walidacja wyniku</h4>
+        <p>Manifold check, raport błędów</p>
+      </div>
+      <div class="card">
+        <span class="prio p1">P1</span>
+        <h4>Presety</h4>
+        <p>🛡 Wytrzymałe · ✨ Estetyczne · ⚡ Szybkie</p>
+      </div>
+      <div class="card">
+        <span class="prio p1">P1</span>
+        <h4>Sugestie promienia</h4>
+        <p>„Dla krawędzi 0.8 mm: zalecany promień 0.3 mm"</p>
+      </div>
+    </div>
+
+    <h3>Faza 2 (3-6 miesięcy po MVP)</h3>
+    <ul>
+      <li><strong>Variable radius fillet</strong> — różne promienie na różnych krawędziach (per-edge radius)</li>
+      <li><strong>Auto-suggest all edges</strong> — ML-driven suggester na bazie typu modelu</li>
+      <li><strong>Wall thickness analysis</strong> — wykrywanie zbyt cienkich ścianek</li>
+      <li><strong>Overhang analysis</strong> — wykrywanie kątów wymagających wsparć</li>
+      <li><strong>Print orientation preview</strong> — podpowiedzi jak ustawić model</li>
+      <li><strong>Batch processing</strong> — wiele plików naraz</li>
+      <li><strong>API dla integratorów</strong> — embed w innych serwisach</li>
+    </ul>
+
+    <h3>Faza 3 (long-term, 6-12 miesięcy)</h3>
+    <ul>
+      <li>Generowanie support structures</li>
+      <li>Lattice infill generation</li>
+      <li>AR preview (podgląd w skali 1:1)</li>
+      <li>Direct print do Bambu / Prusa przez WebUSB / MQTT</li>
+      <li>Plugin marketplace — community filters/presets</li>
+      <li>Mobile native app</li>
+    </ul>
+  </section>
+
+  <!-- UX/UI -->
+  <section>
+    <h2><span class="num">05</span>UX/UI — kluczowe decyzje</h2>
+
+    <h3>Zasady projektowe</h3>
+    <ol>
+      <li><strong>„Zero wiedzy technicznej"</strong> — terminologia ukryta za przyjaznymi nazwami (zamiast „bevel width" → „Jak bardzo zaokrąglić")</li>
+      <li><strong>Live preview wszędzie</strong> — każda zmiana parametru musi pokazać efekt w &lt;500 ms</li>
+      <li><strong>Auto-detect &gt; manual</strong> — domyślnie zaznacz wszystkie problematyczne krawędzie</li>
+      <li><strong>Bezpieczne domyślne</strong> — preset „Wytrzymałe" działa w 90% przypadków</li>
+      <li><strong>Mobile-responsive</strong> — viewer uproszczony, ale core działa</li>
+    </ol>
+
+    <h3>Konwencje kolorów krawędzi</h3>
+    <table>
+      <thead><tr><th>Kolor</th><th>Znaczenie</th></tr></thead>
+      <tbody>
+        <tr><td>🟦 Niebieski</td><td>Niezaznaczona (default)</td></tr>
+        <tr><td>🟨 Żółty</td><td>Podświetlona po najechaniu (hover)</td></tr>
+        <tr><td>🟧 Pomarańczowy</td><td>Zaznaczona przez użytkownika</td></tr>
+        <tr><td>🟪 Fioletowy</td><td>Wykryta automatycznie (do potwierdzenia)</td></tr>
+        <tr><td>🟩 Zielony</td><td>Zaokrąglona (w podglądzie wyniku)</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <!-- BIZNES -->
+  <section>
+    <h2><span class="num">06</span>Model biznesowy</h2>
+
+    <h3>Rekomendacja: Freemium + Pro tier</h3>
+    <table>
+      <thead>
+        <tr><th>Plan</th><th>Cena</th><th>Co zawiera</th></tr>
+      </thead>
+      <tbody>
+        <tr><td><strong>Free</strong></td><td>$0</td><td>5 processingów/mies., podstawowe fillet/chamfer, max 50 MB</td></tr>
+        <tr><td><strong>Pro</strong></td><td>$12/mies.</td><td>Unlimited, variable radius, wall analysis, batch, API</td></tr>
+      </tbody>
+    </table>
+
+    <h3>Projekcja finansowa</h3>
+    <p><strong>Przy 1000 użytkowników, 50 płacących Pro:</strong></p>
+    <ul>
+      <li>Przychód: <strong>$600/mies.</strong></li>
+      <li>Koszty cloud (VPS + bandwidth + storage): ~$100-200</li>
+      <li>Koszty processing (CPU time): ~$50</li>
+      <li><strong>Marża: ~60-70%</strong> (typowe dla SaaS)</li>
+    </ul>
+  </section>
+
+  <!-- ROADMAP -->
+  <section id="roadmap">
+    <h2><span class="num">07</span>Roadmap wdrożenia</h2>
+
+    <table>
+      <thead>
+        <tr><th>Faza</th><th>Czas</th><th>Co</th></tr>
+      </thead>
+      <tbody>
+        <tr><td><strong>Faza 0: Setup</strong></td><td>Tydzień 1-2</td><td>Provisioning infra, repo, CI/CD, design w Figma, testy algorytmu MeshLib na 20+ realnych modelach</td></tr>
+        <tr><td><strong>Faza 1: MVP</strong></td><td>Tydzień 3-14</td><td>Backend skeleton → MeshLib pipeline → Frontend → Integracja → QA → Beta launch (ProductHunt, Reddit r/3Dprinting)</td></tr>
+        <tr><td><strong>Faza 2: Iteracja</strong></td><td>Miesiąc 4-6</td><td>Feedback, presety, auto-detect improvements, variable radius, wall thickness</td></tr>
+        <tr><td><strong>Faza 3: Skalowanie</strong></td><td>Miesiąc 7-12</td><td>Płatności Stripe, marketing, integracje (Makeprintable, Printables), mobile PWA</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <!-- RYZYKA -->
+  <section>
+    <h2><span class="num">08</span>Ryzyka i mitygacje</h2>
+    <table>
+      <thead>
+        <tr><th>Ryzyko</th><th>P.</th><th>Wpływ</th><th>Mitygacja</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>Algorytm MeshLib nie radzi sobie z niektórymi meshami</td><td>Średnie</td><td>Wysoki</td><td>Fallback na voxel remeshing (Meshmixer-style)</td></tr>
+        <tr><td>Performance &gt; 30 sek. dla dużych modeli</td><td>Średnie</td><td>Średni</td><td>Auto-decimate input mesh do rozsądnej rozdzielczości</td></tr>
+        <tr><td>Użytkownicy wgrywają zainfekowane pliki</td><td>Niskie</td><td>Wysoki</td><td>ClamAV scan, sandbox processing</td></tr>
+        <tr><td>Koszty cloud rosną szybciej niż przychody</td><td>Średnie</td><td>Średni</td><td>Auto-suspend darmowych kont, queue priority dla Pro</td></tr>
+        <tr><td>Konkurencja (Canva dla 3D?)</td><td>Niskie</td><td>Wysoki</td><td>First-mover advantage, nisza edge rounding</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <!-- KPIS -->
+  <section>
+    <h2><span class="num">09</span>Metryki sukcesu (KPIs)</h2>
+    <table>
+      <thead>
+        <tr><th>Termin</th><th>Cel</th></tr>
+      </thead>
+      <tbody>
+        <tr><td><strong>3 miesiące po launch</strong></td><td>1 000 zarejestrowanych · 10 000 przetworzonych modeli · D7 retention &gt;25% · NPS &gt;40</td></tr>
+        <tr><td><strong>6 miesięcy</strong></td><td>100 płacących Pro · $1 200 MRR · D30 retention &gt;15%</td></tr>
+        <tr><td><strong>12 miesięcy</strong></td><td>10 000 użytkowników · $10 000 MRR · integracja z min. 2 dużymi platformami</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <!-- GLOSARIUSZ -->
+  <section>
+    <h2><span class="num">10</span>Glosariusz terminów</h2>
+    <table>
+      <thead>
+        <tr><th>Termin techniczny</th><th>Nazwa w UI</th><th>Opis</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>Edge</td><td>Krawędź</td><td>Linia styku dwóch ścianek</td></tr>
+        <tr><td>Vertex</td><td>Wierzchołek</td><td>Punkt, w którym spotykają się krawędzie</td></tr>
+        <tr><td>Fillet</td><td>Zaokrąglenie</td><td>Łuk okrągły na krawędzi</td></tr>
+        <tr><td>Chamfer</td><td>Ścięcie</td><td>Skośna płaszczyzna na krawędzi</td></tr>
+        <tr><td>Manifold</td><td>Zamknięta powierzchnia</td><td>Mesh, który reprezentuje pełny obiekt 3D</td></tr>
+        <tr><td>Non-manifold edge</td><td>Krawędź problematyczna</td><td>Krawędź, która uniemożliwia poprawny slicing</td></tr>
+        <tr><td>STL</td><td>Format pliku</td><td>Standard dla druku 3D (trójkąty + normalne)</td></tr>
+        <tr><td>3MF</td><td>Format pliku</td><td>Nowoczesny format (XML, kolory, jednostki)</td></tr>
+        <tr><td>DfAM</td><td>Design for AM</td><td>Zasady projektowania pod druk 3D</td></tr>
+        <tr><td>FDM</td><td>Fused Deposition Modeling</td><td>Najpopularniejsza technologia druku 3D</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <!-- ŹRÓDŁA -->
+  <section>
+    <h2><span class="num">11</span>Źródła researchu</h2>
+    <ol>
+      <li>Pollen AM — „Fillets, Ribs &amp; Edges in 3D Printing — DfAM" — pollen.am</li>
+      <li>BigRep — „Fillets vs. Chamfers in 3D Printed Parts" — bigrep.com</li>
+      <li>Markforged — „3D Printing Design Tips" — markforged.com</li>
+      <li>MeshLib Documentation — meshlib.io</li>
+      <li>Manifold3D GitHub (elalish/manifold) — github.com/elalish/manifold</li>
+      <li>three-mesh-bvh (gkjohnson) — github.com/gkjohnson/three-mesh-bvh</li>
+      <li>Blender 3D Print Toolbox — docs.blender.org</li>
+      <li>Meshmixer Tutorials — formlabs.com, sculpteo.com</li>
+      <li>Bambu Studio / PrusaSlicer documentation</li>
+      <li>meshoptimizer library — github.com/zeux/meshoptimizer</li>
+    </ol>
+
+    <div class="callout success" style="margin-top:32px">
+      <strong>🎉 Gotowe do wdrożenia.</strong> Specyfikacja zawiera wszystko, czego zespół developerski potrzebuje: kontekst biznesowy, user flow krok po kroku, architekturę, stack, listę funkcji z priorytetami, roadmap i KPI.
+    </div>
+  </section>
+
+</div>
+
+<footer>
+  <div class="container">
+    RoundEdge — Specyfikacja v1.0 · Wygenerowano 2026-06-27 · Wszystkie pliki źródłowe w <code>/workspace/spec/</code>
+  </div>
+</footer>
+
+</body>
+</html>
