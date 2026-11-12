@@ -53,4 +53,6 @@ jobs:
         with:
           python-version: '3.11'
       - name: Diagnostyka Python musi zgadzać się z TypeScript
-        run: python scripts/verify_backend.py
+        run: |
+          pip install --quiet fastapi uvicorn python-multipart
+          python scripts/verify_backend.py
