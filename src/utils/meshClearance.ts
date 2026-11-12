@@ -70,16 +70,9 @@ export function buildClearanceGrid(mesh: MeshData): ClearanceGrid {
   const diag = Math.hypot(maxX - minX, maxY - minY, maxZ - minZ);
 
   // --- Rozmiar komórki ---
-  // Mediana długości krawędzi mierzy gęstość siatki; `diag/64` gwarantuje
-  // maksymalnie 64 komórki na oś (limit pamięci i czasu). Komórka nie może
-  // być mniejsza niż 1e-9 (dzielenie przez nią w DDA).
-  const lengths: number[] = [];
-  for (const edge of mesh.edges) {
-    if (Number.isFinite(edge.length) && edge.length > 0) lengths.push(edge.length);
-  }
-  lengths.sort((a, b) => a - b);
-  const medianEdge = lengths.length > 0 ? lengths[lengths.length >> 1] : 0;
-  const cs = Math.max(medianEdge, diag / 64, 1e-9);
+  // Ograniczona rozdzielczość siatki (limit pamięci/czasu, ochrona przed OOM na gęstych meshach).
+  const maxDim = 40;
+  const cs = Math.max(diag / maxDim, 1e-9);
   const invCs = 1 / cs;
 
   const nx = Math.max(1, Math.ceil((maxX - minX) / cs));
