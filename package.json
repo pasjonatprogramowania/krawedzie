@@ -10,6 +10,7 @@
     "typecheck": "tsc -b",
     "test": "node tests/all.test.ts",
     "test:ssr": "node scripts/ssr-smoke.mjs",
+    "check": "npm run lint && npm run typecheck && npm test && npm run test:ssr && npm run build",
     "preview": "vite preview"
   },
   "dependencies": {

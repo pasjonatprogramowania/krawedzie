@@ -1,0 +1,56 @@
+name: CI
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  node:
+    name: Node ${{ matrix.node }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # 22.18.0 = najstarsza linia LTS z włączonym type-strippingiem (node tests/*.ts),
+        # 24 = aktualny LTS z natywnym uruchamianiem TypeScriptu bez flagi.
+        node: ['22.18.0', '24']
+    env:
+      # Node 22.18 ma type-stripping już domyślnie; flaga jest tylko zabezpieczeniem.
+      NODE_OPTIONS: ${{ matrix.node == '22.18.0' && '--experimental-strip-types' || '' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+      - run: npm ci
+      - name: Lint (oxlint)
+        run: npm run lint
+      - name: Types (tsc -b)
+        run: npm run typecheck
+      - name: Unit tests
+        run: npm test
+      - name: UI smoke test (SSR render)
+        run: npm run test:ssr
+      - name: Production build
+        run: npm run build
+
+  python:
+    name: Python backend cross-check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Diagnostyka Python musi zgadzać się z TypeScript
+        run: python scripts/verify_backend.py
