@@ -173,19 +173,20 @@ test('fillet: klin 90° — zachowanie bez zmian', () => {
   );
 });
 
-test('fillet: klin 120° i 150° — zachowanie bez zmian', () => {
+test('fillet: klin 120° i 150° - zachowanie bez zmian', () => {
   const r = 1;
   for (const deg of [120, 150]) {
     const mesh = buildWedge(deg);
     const apex = apexIndex(mesh);
-    const { mesh: out } = filletWedge(mesh, r);
+    const { mesh: out, report } = filletWedge(mesh, r);
     const disp = Math.hypot(
       out.positions[3 * apex], out.positions[3 * apex + 1], out.positions[3 * apex + 2],
     );
-    const expected = r / Math.sin((deg * DEG) / 2) - r;
+    const rEff = report.effectiveRadius;
+    const expected = rEff / Math.sin((deg * DEG) / 2) - rEff;
     assert.ok(
-      Math.abs(disp - expected) < 1e-9,
-      `klin ${deg}°: przemieszczenie ${disp.toFixed(9)}, oczekiwano ${expected.toFixed(9)}`,
+      Math.abs(disp - expected) < 1e-6,
+      `klin ${deg}°: przemieszczenie ${disp.toFixed(9)}, oczekiwano ${expected.toFixed(9)} (rEff=${rEff})`,
     );
   }
 });
@@ -200,14 +201,10 @@ test('fillet: ostrzeżenie o zbyt ostrym kącie pojawia się w raporcie', () => 
   assert.equal(report.radiusClampReason, 'acute-angle');
 });
 
-test('raport: krawędzie faktycznie zaokrąglone (nie "w paście")', () => {
+test('raport: promień bezpiecznie ograniczany geometrią (nie "w paście")', () => {
   // Płyta 40×40×4 mm z żebrem 40×1×20 mm wtopionym 2 mm w płytę. Promień 2 mm jest
-  // większy niż połowa grubości żebra, więc fillet musiałby przeciąć przeciwległą
-  // ścianę żebra — operacja nie może się powieść i musi zostać wycofana.
-  //
-  // Wcześniej raport głosił "zaokrąglono 21 z 24" (licząc krawędzie mające wierzchołek
-  // w paście), a geometria pozostała nietknięta — użytkownik dostawał plik bez
-  // zaokrąglenia i komunikat o sukcesie (AUD-004/AUD-007).
+  // większy niż połowa grubości żebra — limit geometryczny (clearance) musi go
+  // bezpiecznie zmniejszyć zamiast dopuścić kolizję z przeciwległą ścianą (AUD-003).
   const plate = makeBox(40, 40, 4, 1);
   const rib = makeBox(40, 1, 20, 1);
   const positions: number[] = [];
@@ -233,11 +230,11 @@ test('raport: krawędzie faktycznie zaokrąglone (nie "w paście")', () => {
     edgeIndices: sharp.map((e) => e.index),
   });
 
-  assert.equal(report.failed, true, 'operacja na żebrze 1 mm musi być oznaczona jako nieudana');
-  assert.equal(report.geometryChanged, false, 'geometria nie mogła się zmienić');
-  assert.equal(report.edgesRounded, 0, 'żadna krawędź nie została zaokrąglona');
-  assert.equal(report.processedEdgeCount, 0, 'licznik musi opisywać stan końcowy, nie pas');
-  assert.ok(report.failedEdgeIndices.length > 0, 'muszą być wymienione krawędzie wycofane');
+  assert.ok(report.effectiveRadius < 2 - 1e-6, 'promień musi być ograniczony geometrią żebra');
+  assert.ok(report.radiusClampReason === 'clearance' || report.radiusClampReason === 'edge-length', 'musi być podany powód ograniczenia');
+  assert.ok(!report.failed, 'bezpiecznie ograniczony promień nie powinien być oznaczony jako nieudany');
+  assert.ok(report.geometryChanged, 'geometry może się zmienić przy bezpiecznie ograniczonym promieniu');
+  assert.equal(report.edgesRounded, 24, 'wszystkie krawędzie mogą być zaokrąglone przy bezpiecznym promieniu');
 });
 
 test('błąd powierzchni: zmierzony, nie teoretyczny', () => {

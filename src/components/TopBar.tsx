@@ -53,7 +53,7 @@ export function TopBar(props: TopBarProps) {
   // minimum, podłoga schodzi do jego wartości — inaczej suwak pokazywałby inną
   // liczbę niż stan, a użytkownik nie mógłby podnieść promienia.
   const sliderMin = Math.min(radiusMinMm, radiusMm);
-  const radiusLabel = radiusKind === 'fillet' ? 'Promień' : 'Szerokość ścięcia';
+  const radiusLabel = radiusKind === 'fillet' ? 'Promień' : 'Ramię ścięcia';
 
   return (
     <header className="absolute inset-x-0 top-0 z-40 flex h-[52px] flex-wrap items-center gap-3 border-b border-line bg-surface-base/85 px-3 backdrop-blur-md">

@@ -44,6 +44,7 @@
 
 import type { EdgeRecord, MeshData, RoundingKind, RoundingOptions, RoundingReport, RoundingResult } from './meshTypes.ts';
 import { buildTopology, pointSegmentDistance, signedVolume } from './meshTopology.ts';
+import { buildClearanceGrid } from './meshClearance.ts';
 
 const DEG = Math.PI / 180;
 /** cos(89°) — próg wykrycia odwrócenia normalnej trójkąta. */
@@ -167,21 +168,6 @@ function smoothstep01(t: number): number {
 }
 
 /** Minimalna długość krawędzi incydentnej do wierzchołka, z pominięciem krawędzi wzorcowych. */
-function computeMinIncidentEdge(mesh: MeshData, isFeatureEdge: Uint8Array): Float64Array {
-  const out = new Float64Array(mesh.vertexCount).fill(Infinity);
-  for (const e of mesh.edges) {
-    if (isFeatureEdge[e.index] || e.length <= 0) continue;
-    if (e.length < out[e.v0]) out[e.v0] = e.length;
-    if (e.length < out[e.v1]) out[e.v1] = e.length;
-  }
-  for (const e of mesh.edges) {
-    if (e.length <= 0) continue;
-    if (!Number.isFinite(out[e.v0])) out[e.v0] = e.length;
-    if (!Number.isFinite(out[e.v1])) out[e.v1] = e.length;
-  }
-  for (let i = 0; i < out.length; i++) if (!Number.isFinite(out[i])) out[i] = 0;
-  return out;
-}
 
 function edgeIndexFromKey(mesh: MeshData, a: number, b: number): number {
   const key = a < b ? a * mesh.vertexCount + b : b * mesh.vertexCount + a;
@@ -825,37 +811,34 @@ export function roundEdges(mesh: MeshData, options: RoundingOptions): RoundingRe
     return { mesh, report: baseReport({ selectedEdgeCount: requested.length, skippedFlatEdgeCount: skippedFlat, skippedBoundaryEdgeCount: skippedBoundary }) };
   }
 
-  // --- 2. Promień efektywny (clamp do lokalnej skali siatki) -----------------
-  const minIncident = computeMinIncidentEdge(mesh, isFeatureEdge);
-  // Używamy 5. percentyla, nie absolutnego minimum: w realnych plikach STL zdarzają się
-  // pojedyncze "słiverowe" krawędzie (0.01 mm), które nie opisują żadnej realnej cechy,
-  // a zablokowałyby całą operację.
-  const incidentSamples: number[] = [];
-  for (const e of chosen) {
-    for (const v of [e.v0, e.v1]) {
-      const len = minIncident[v];
-      if (Number.isFinite(len) && len > 0) incidentSamples.push(len);
-    }
-  }
-  incidentSamples.sort((a, b) => a - b);
-  const medianIncident = incidentSamples.length > 0
-    ? incidentSamples[Math.floor(0.5 * (incidentSamples.length - 1))]
-    : Infinity;
+  // --- 2. Promień efektywny (clamp geometryczny, nie siatkowy; AUD-003) -------
   const minBboxDim = Math.min(bboxBefore[0], bboxBefore[1], bboxBefore[2]) || Infinity;
-
   const radiusRequested = Math.max(1e-4, options.radius);
   let effectiveRadius = radiusRequested;
-  // Górne ograniczenie promienia: mediana lokalnej skali (odporna na pojedyncze
-  // "słiverowe" krawędzie, które zablokowałyby całą operację) oraz połowa najmniejszego
-  // gabarytu (fillet nie może przekroczyć rozmiaru części).
-  const radiusCap = Math.min(0.5 * medianIncident, 0.5 * minBboxDim);
   let radiusClampReason: RoundingReport['radiusClampReason'] = null;
-  if (radiusCap < effectiveRadius) {
-    effectiveRadius = Math.max(1e-4, radiusCap);
+
+  // Wolny odstęp do przeciwległej powierzchni (nie długość krawędzi siatki).
+  let clearanceMin = Infinity;
+  if (chosen.length > 0) {
+    const grid = buildClearanceGrid(mesh);
+    for (const e of chosen) {
+      const c = grid.edgeClearance(e);
+      if (Number.isFinite(c) && c > 0) clearanceMin = Math.min(clearanceMin, c);
+    }
+  }
+  const bboxCap = 0.5 * minBboxDim;
+  if (Number.isFinite(clearanceMin) && clearanceMin < effectiveRadius) {
+    effectiveRadius = Math.max(1e-4, clearanceMin);
+    radiusClampReason = 'clearance';
+  }
+  if (bboxCap < effectiveRadius) {
+    effectiveRadius = Math.max(1e-4, bboxCap);
     radiusClampReason = 'edge-length';
+  }
+  if (effectiveRadius < radiusRequested - 1e-9) {
     warnings.push(
-      `Promień ograniczony do ${effectiveRadius.toFixed(3)} mm (żądano ${radiusRequested.toFixed(2)} mm) — ` +
-      'większy promień przekroczyłby lokalną skalę modelu i zniszczył sąsiednie cechy.',
+      `Promień ograniczony do ${effectiveRadius.toFixed(3)} mm (żądano ${radiusRequested.toFixed(2)} mm) - ` +
+      'większy promień przekroczyłby geometrię modelu.',
     );
   }
   const size = effectiveRadius;
@@ -959,8 +942,19 @@ export function roundEdges(mesh: MeshData, options: RoundingOptions): RoundingRe
   const refineRadius = maxReach * 1.15 + targetLength * 2;
 
   // --- 5. Zagęszczenie pasa -------------------------------------------------
+  const origMinEdge = new Float64Array(mesh.vertexCount).fill(Infinity);
+  for (let e = 0; e < mesh.edges.length; e++) {
+    const er = mesh.edges[e];
+    const len = Math.hypot(
+      mesh.positions[3 * er.v1] - mesh.positions[3 * er.v0],
+      mesh.positions[3 * er.v1 + 1] - mesh.positions[3 * er.v0 + 1],
+      mesh.positions[3 * er.v1 + 2] - mesh.positions[3 * er.v0 + 2],
+    );
+    if (len < origMinEdge[er.v0]) origMinEdge[er.v0] = len;
+    if (len < origMinEdge[er.v1]) origMinEdge[er.v1] = len;
+  }
   const refined = refineBand(
-    mesh, grid, features, targetLength, refineRadius, maxLevels, triangleBudget, minIncident,
+    mesh, grid, features, targetLength, refineRadius, maxLevels, triangleBudget, origMinEdge,
   );
   const work = refined.mesh;
 

@@ -60,15 +60,21 @@ export default function App() {
 
   const isWide = useMediaQuery('(min-width: 900px)');
   const [sheetTab, setSheetTab] = useState<SheetTab>('params');
-  const [sheetOpen, setSheetOpen] = useState(true);
+  const [sheetOpen, setSheetOpen] = useState(false);
+
+  // Na szerokim ekranie panel boczny jest widoczny; na wąskim domyślnie zwinięty.
+  useEffect(() => {
+    setSheetOpen(isWide);
+  }, [isWide]);
 
   // --- Powiadomienia -----------------------------------------------------------
   const [toasts, setToasts] = useState<ToastItem[]>([]);
   const toastSeq = useRef(0);
   const toastSeen = useRef(new Set<string>());
+  const loadSeq = useRef(0);
 
-  const pushToast = useCallback((kind: 'info' | 'warn' | 'ok', text: string) => {
-    if (toastSeen.current.has(text)) return;
+  const pushToast = useCallback((kind: 'info' | 'warn' | 'ok', text: string, force = false) => {
+    if (!force && toastSeen.current.has(text)) return;
     toastSeen.current.add(text);
     const id = ++toastSeq.current;
     setToasts((prev) => [...prev.slice(-4), { id, kind, text }]);
@@ -87,6 +93,7 @@ export default function App() {
 
   // --- Wczytywanie pliku -------------------------------------------------------
   const loadMeshFromFile = useCallback((fileToLoad: File) => {
+    const seq = ++loadSeq.current;
     setFile(fileToLoad);
     setMeshData(null);
     setDiagnostics(null);
@@ -96,8 +103,12 @@ export default function App() {
 
     const ext = fileToLoad.name.slice(fileToLoad.name.lastIndexOf('.')).toLowerCase();
     const reader = new FileReader();
-    reader.onerror = () => setLoadError('Nie udało się odczytać pliku.');
+    reader.onerror = () => {
+      if (seq !== loadSeq.current) return;
+      setLoadError('Nie udało się odczytać pliku.');
+    };
     reader.onload = (e) => {
+      if (seq !== loadSeq.current) return;
       const buffer = e.target?.result as ArrayBuffer | undefined;
       if (!buffer) return;
       try {
@@ -138,6 +149,7 @@ export default function App() {
         }
 
         const built = buildMeshFromRaw(positions, indices);
+        if (seq !== loadSeq.current) return;
         if (built.mesh.faceCount === 0) {
           throw new Error('Po walidacji nie pozostał żaden poprawny trójkąt.');
         }
@@ -153,6 +165,7 @@ export default function App() {
         setSelectedEdges(auto);
         setSharpThreshold(30);
       } catch (err) {
+        if (seq !== loadSeq.current) return;
         setLoadError((err as Error).message);
         setFile(null);
       }
@@ -161,7 +174,10 @@ export default function App() {
   }, []);
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (e.target.files && e.target.files.length > 0) loadMeshFromFile(e.target.files[0]);
+    const f = e.target.files?.[0];
+    // Pozwala wczytać ten sam plik ponownie (Reset → Import tego samego pliku).
+    e.target.value = '';
+    if (f) loadMeshFromFile(f);
   };
 
   const handleImportClick = () => {
@@ -169,12 +185,17 @@ export default function App() {
   };
 
   const handleLoadDemo = async (path: string, name: string) => {
+    const seq = ++loadSeq.current;
     try {
       const response = await fetch(path);
       if (!response.ok) throw new Error('Nie udało się pobrać modelu demonstracyjnego.');
       const blob = await response.blob();
+      if (seq !== loadSeq.current) return;
+      // loadMeshFromFile ustawi własny seq; cofamy, by nie przeskoczyć licznika.
+      loadSeq.current = seq - 1;
       loadMeshFromFile(new File([blob], name, { type: 'application/octet-stream' }));
     } catch (err) {
+      if (seq !== loadSeq.current) return;
       setLoadError((err as Error).message);
     }
   };
@@ -277,7 +298,7 @@ export default function App() {
         const res = roundEdges(meshData, { radius, segments, kind, edgeIndices });
         setResult(res);
       } catch (err) {
-        setLoadError(`Błąd przetwarzania: ${(err as Error).message}`);
+        pushToast('warn', `Błąd przetwarzania: ${(err as Error).message}`, true);
         setResult(null);
       } finally {
         setBusy(false);
@@ -291,17 +312,19 @@ export default function App() {
   const download = (format: 'stl' | 'obj') => {
     const mesh = result?.mesh ?? meshData;
     if (!mesh || !file) return;
+    const rounded = Boolean(result && result.report.geometryChanged && !result.report.failed);
     const blob = format === 'stl' ? exportToSTL(mesh) : exportToOBJ(mesh);
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
     const lastDot = file.name.lastIndexOf('.');
     const base = lastDot !== -1 ? file.name.slice(0, lastDot) : file.name;
     link.href = url;
-    link.download = `${base}_rounded.${format}`;
+    link.download = `${base}${rounded ? '_rounded' : ''}.${format}`;
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
-    URL.revokeObjectURL(url);
+    // Odroczone zwolnienie: natychmiastowe revoke potrafi przerwać pobieranie.
+    window.setTimeout(() => URL.revokeObjectURL(url), 1000);
   };
 
   // --- Ostrzeżenia -------------------------------------------------------------
@@ -360,13 +383,15 @@ export default function App() {
   }, [result, radiusWarning, minRadius, nozzleMm, diagnostics]);
 
   // --- Nawisy ------------------------------------------------------------------
+  // Nawisy po zaokrągleniu mogą się zmienić — liczymy na aktualnej siatce.
+  const overhangSource = result?.mesh ?? meshData;
   const overhangs = useMemo(
-    () => (meshData ? analyzeOverhangs(meshData, OVERHANG_ANGLE_DEG) : []),
-    [meshData],
+    () => (overhangSource ? analyzeOverhangs(overhangSource, OVERHANG_ANGLE_DEG) : []),
+    [overhangSource],
   );
   const overhangArea = useMemo(
-    () => (meshData ? overhangAreaMm2(meshData, OVERHANG_ANGLE_DEG) : 0),
-    [meshData],
+    () => (overhangSource ? overhangAreaMm2(overhangSource, OVERHANG_ANGLE_DEG) : 0),
+    [overhangSource],
   );
 
   // --- Komunikaty --------------------------------------------------------------

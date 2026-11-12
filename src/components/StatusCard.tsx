@@ -89,10 +89,10 @@ export function StatusCard({ diagnostics, result, warnings, className = '' }: St
               tip="Trójkąty o zerowym polu — nie dałyby się pociąć."
             />
             <DiagRow
-              label="Hausdorff ≤ promień"
+              label="Limit przemieszczenia"
               ok={report.maxDisplacement <= report.effectiveRadius + 1e-9}
               detail={`${fmtMm(report.maxDisplacement, 3)} ≤ ${fmtMm(report.effectiveRadius, 3)} mm`}
-              tip="Twarda gwarancja: żaden wierzchołek nie przesunął się bardziej niż o zadany promień."
+              tip="Maks. ruch wierzchołka ograniczony budżetem promienia (limit wymuszany w algorytmie)."
             />
             <DiagRow
               label="Płaszczyzny zachowane"

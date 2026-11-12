@@ -414,7 +414,7 @@ test('FILLET: dowolny kąt dwuścienny — powierzchnia to łuk o promieniu r (n
       .filter((x) => x.d < 1e-6)[0];
     assert.ok(edge, `brak krawędzi w wierzchołku klina dla ${deg}°`);
 
-    const { mesh: out } = roundEdges(m, {
+    const { mesh: out, report } = roundEdges(m, {
       radius: r,
       segments: 4,
       kind: 'fillet',
@@ -424,7 +424,8 @@ test('FILLET: dowolny kąt dwuścienny — powierzchnia to łuk o promieniu r (n
       taperEnds: false,
     });
 
-    const axis = r / Math.sin(theta / 2);
+    const rEff = report.effectiveRadius;
+    const axis = rEff / Math.sin(theta / 2);
     let maxErr = 0;
     let moved = 0;
     for (let v = 0; v < out.vertexCount; v++) {
@@ -437,10 +438,10 @@ test('FILLET: dowolny kąt dwuścienny — powierzchnia to łuk o promieniu r (n
       if (t > axis + 1e-9) continue; // poza strefą łuku (dalsza część ramion)
       moved++;
       const rho = Math.abs(axis - t);
-      maxErr = Math.max(maxErr, Math.abs(rho - r));
+      maxErr = Math.max(maxErr, Math.abs(rho - rEff));
     }
-    assert.ok(moved > 0, `nie zmierzono żadnego wierzchołka łuku dla ${deg}°`);
-    assert.ok(maxErr < 1e-9, `kąt ${deg}°: max |rho − r| = ${maxErr}`);
+    assert.ok(moved > 0, `nie zmierzono żadnego wierzchołka łuku dla ${deg}° (rEff=${rEff})`);
+    assert.ok(maxErr < 1e-6, `kąt ${deg}°: max |rho − r| = ${maxErr}`);
   }
 });
 

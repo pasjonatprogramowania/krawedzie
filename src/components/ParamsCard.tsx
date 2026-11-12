@@ -69,7 +69,7 @@ export function ParamsCard({
           onChange={onKindChange}
           options={[
             { value: 'fillet', label: 'Zaokrąglenie', title: 'Łuk okręgu styczny do obu ścian.' },
-            { value: 'chamfer', label: 'Ścięcie', title: 'Płaskie ścięcie pod 45°.' },
+            { value: 'chamfer', label: 'Ścięcie', title: 'Płaskie ścięcie (fazka).' },
           ]}
           className="w-full"
         />
