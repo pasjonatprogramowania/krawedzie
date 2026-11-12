@@ -17,7 +17,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-from app.main import inspect, parse_stl, weld  # noqa: E402
+from app.geometry import inspect, parse_stl, weld  # noqa: E402
 
 EXPECTED = {
     "public/cube.stl": {
@@ -67,9 +67,11 @@ def build(path: Path) -> dict:
                 faces.append((a, b, c))
         result = inspect(vertices, faces)
         result["triangles"] = len(triangles)
-        if best is None or (
-            result["boundaryEdgeCount"] == 0 and result["faceCount"] > 0
-        ) or result["boundaryEdgeCount"] < best["boundaryEdgeCount"]:
+        if (
+            best is None
+            or (result["boundaryEdgeCount"] == 0 and result["faceCount"] > 0)
+            or result["boundaryEdgeCount"] < best["boundaryEdgeCount"]
+        ):
             best = result
         if result["boundaryEdgeCount"] == 0 and result["faceCount"] > 0:
             break
@@ -94,7 +96,11 @@ def main() -> int:
             if not ok:
                 failures += 1
     print()
-    print("Zgodne z implementacja TypeScript" if failures == 0 else f"Rozbieznosci: {failures}")
+    print(
+        "Zgodne z implementacja TypeScript"
+        if failures == 0
+        else f"Rozbieznosci: {failures}"
+    )
     return 1 if failures else 0
 
 

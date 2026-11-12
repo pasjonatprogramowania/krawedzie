@@ -53,6 +53,5 @@ jobs:
         with:
           python-version: '3.11'
       - name: Diagnostyka Python musi zgadzać się z TypeScript
-        run: |
-          pip install --quiet fastapi uvicorn python-multipart
-          python scripts/verify_backend.py
+        # app/geometry.py ma wyłącznie bibliotekę standardową — brak instalacji.
+        run: python scripts/verify_backend.py
