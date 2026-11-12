@@ -2,9 +2,9 @@
 
 **Zaokrąglanie krawędzi siatek 3D pod druk 3D — w całości w przeglądarce.**
 
-Wgrywasz STL/OBJ, klikasz krawędzie (albo każesz je wykryć automatycznie), ustawiasz
-promień i pobierasz gotowy plik. Model nigdy nie opuszcza komputera: nie ma backendu,
-nie ma uploadu, nie ma kolejki.
+Wgrywasz STL/OBJ/3MF, klikasz krawędzie (albo korzystasz z auto-detekcji ostrych),
+ustawiasz dyszę i promień, a wynik pobierasz jako STL/OBJ. Przetwarzanie jest lokalne
+w przeglądarce — model nie opuszcza komputera.
 
 ```
 npm install
@@ -15,40 +15,37 @@ npm run dev      # http://localhost:5173
 
 ## 1. Co robi — i czego nie robi
 
-**Robi:** zamienia wybrane ostre krawędzie w **dokładny łuk okrągły** (fillet) albo
-w **ścięcie** (chamfer), nie ruszając niczego poza wąskim pasem wokół tych krawędzi.
+**Robi:** zamienia wybrane ostre krawędzie w **łuk okrągły** (fillet) albo w **ścięcie**
+(chamfer) w wąskim pasie wokół tych krawędzi. Wynik jest raportowany uczciwie: raport
+zawiera m.in. `edgesRounded`, `geometryChanged`, `failed`, `failedEdgeIndices`,
+`measuredSurfaceError` i `radiusClampReason`; przy `failed` eksport zaokrąglonego wyniku
+jest blokowany w UI.
 
-**Nie robi:** nie wygładza siatki, nie remeshuje, nie decymuje, nie skaluje, nie
-centruje, nie „naprawia" geometrii po cichu. To nie jest Laplacian/Taubin smoothing —
-te operacje nie mają jednostki (mm) i kurczą model, więc nie spełniają wymagania
-„zmień tylko rogi".
-
-Konsekwencja praktyczna: **wymiary i struktura zostają**. Wierzchołek odległy od
-wszystkich zaznaczonych krawędzi o więcej niż promień jest w wyniku **bit w bit**
-taki sam jak na wejściu (test: [tests/rounding.test.ts](tests/rounding.test.ts)).
+**Nie robi:** nie używa Laplaciana/Taubina/HC ani innego wygładzania bez jednostki (mm),
+nie remeshuje globalnie i nie „naprawia" geometrii po cichu. Zmiana ma dotyczyć tylko
+wybranych narożników. Ograniczenia siatki, zasięgu i geometrii są widoczne w raporcie
+i ostrzeżeniach, nie ukrywane.
 
 ## 2. Jak się tego używa
 
 1. **Wgraj model** — przeciągnij plik albo wczytaj demo (`public/cube.stl`,
-   `public/pranie.stl`).
+   `public/pranie.stl`) z karty startowej.
 2. **Zaznacz krawędzie** — klik w bryłę trafia w najbliższą z trzech krawędzi
-   klikniętej ściany; `Shift`/klik wielokrotny dodaje do zaznaczenia; przycisk
-   auto-detekcji zaznacza wszystkie krawędzie ostrzejsze niż próg (domyślnie 30°).
-3. **Wybierz preset** albo ustaw promień ręcznie:
+   klikniętej ściany; przyciski pozwalają zaznaczyć ostre, wszystkie lub wyczyścić.
+   Próg ostrości (domyślnie 30°) i widok wszystkich krawędzi są dostępne w panelu opcji.
+3. **Ustaw parametry druku** w górnym pasku i panelach:
+   - **dysza** (`src/utils/printParams.ts`, opcje z `src/utils/printability.ts`),
+   - **promień** — suwak ograniczany do minimum drukowalnego `2 × dysza`
+     (`minRadiusMm` w `src/utils/printParams.ts` / `printRules` w `src/utils/printability.ts`),
+   - **typ** fillet/chamfer, segmenty i presety (Bezpieczne 0,8 mm, Wytrzymałe 1,6 mm,
+     Ścięcie 45° 0,8 mm, Własne).
+4. **Sprawdź wynik** — interfejs w stylu PrintFins (ciemny, canvas-first, pływające szyny):
+   statystyki modelu, opcje, nawisy (analiza `analyzeOverhangs`), status/ostrzeżenia,
+   porównanie przed/po/overlay oraz **zmierzony błąd powierzchni** (`measuredSurfaceError`).
+5. **Pobierz STL albo OBJ** — eksport zablokowany, gdy operacja zakończyła się niepowodzeniem.
 
-   | Preset | Typ | Wartość | Kiedy |
-   |---|---|---|---|
-   | Bezpieczne | fillet | 0,4 mm | domyślny; jedna średnica dyszy |
-   | Wytrzymałe | fillet | 1,0 mm | redukcja koncentracji naprężeń |
-   | Ścięcie 45° | chamfer | 0,6 mm | gdy fillet nie wchodzi w detal |
-   | Własne | — | dowolne | pełna kontrola |
-
-4. **Popatrz na tabelę „przed / po"** — liczba trójkątów, objętość, zmiana wymiarów
-   gabarytowych, maksymalne przesunięcie wierzchołka, diagnostyka topologii.
-5. **Pobierz STL albo OBJ.**
-
-Przetwarzanie jest odporne na szybkie klikanie: przeliczenie jest odpytywane z
-opóźnieniem 90 ms i pokazuje stan „liczę".
+Przetwarzanie jest odraczane (debounce 90 ms) i uruchamiane lokalnie w przeglądarce.
+Web Worker dla tej ścieżki **nie jest jeszcze wdrożony** (zadanie 6 w planie).
 
 ## 3. Algorytm
 
@@ -199,59 +196,71 @@ chamferu 45°, bo daje przewidywalny, płaski rowek zamiast łuku.
 
 | Ścieżka | Rola |
 |---|---|
-| [src/App.tsx](src/App.tsx) | cały interfejs: wczytywanie, selekcja, presety, raport przed/po, eksport |
-| [src/components/ThreeViewer.tsx](src/components/ThreeViewer.tsx) | scena three.js, raycast po ścianach → krawędzie, rysowanie zaznaczenia |
-| [src/utils/edgeRounding.ts](src/utils/edgeRounding.ts) | **rdzeń algorytmu**: `roundEdges`, subdzielenie pasa, naprawa |
-| [src/utils/meshTopology.ts](src/utils/meshTopology.ts) | spawanie, graf krawędzi, orientacja ścian, diagnostyka, objętość/pole |
-| [src/utils/meshIO.ts](src/utils/meshIO.ts) | STL/OBJ → zupa trójkątów, `BufferGeometry` ↔ `MeshData` |
-| [src/utils/meshExport.ts](src/utils/meshExport.ts) | binarny STL i OBJ na wyjściu |
-| [src/utils/meshTypes.ts](src/utils/meshTypes.ts) | kontrakty typów całego pipeline'u |
-| [tests/](tests) | 50 testów: topologia, subdzielenie, fillet/chamfer, modele demo, pipeline, UI |
-| [scripts/ssr-smoke.mjs](scripts/ssr-smoke.mjs) | render interfejsu bez przeglądarki (build SSR + `renderToStaticMarkup`) |
-| [app/main.py](app/main.py) | opcjonalny serwer referencyjny (tylko diagnostyka — patrz niżej) |
-| [scripts/verify_backend.py](scripts/verify_backend.py) | niezależna implementacja diagnostyki w Pythonie, porównywana z TypeScriptem |
-| [MEMORY.md](MEMORY.md) | zwarta pamięć projektu: niezmienniki, pułapki, złote dane |
+| [src/App.tsx](src/App.tsx) | stan aplikacji, wczytywanie, selekcja, przeliczenie, eksport, ostrzeżenia |
+| [src/components/TopBar.tsx](src/components/TopBar.tsx) | górny pasek: import/eksport, dysza, promień, akcje selekcji |
+| [src/components/StatsRail.tsx](src/components/StatsRail.tsx) | lewa szyna: statystyki pliku/modelu |
+| [src/components/OptionsRail.tsx](src/components/OptionsRail.tsx) | prawa szyna: krawędzie, parametry, nawisy |
+| [src/components/StatusCard.tsx](src/components/StatusCard.tsx) | status wyniku i ostrzeżenia |
+| [src/components/ViewBar.tsx](src/components/ViewBar.tsx) | tryb porównania i podpowiedzi widoku |
+| [src/components/HeroCard.tsx](src/components/HeroCard.tsx) | ekran startowy / demo |
+| [src/components/ThreeViewer.tsx](src/components/ThreeViewer.tsx) | scena three.js, raycast i podświetlanie (pomocniczo `viewerPicking.ts`, `viewerGeometry.ts`) |
+| [src/utils/edgeRounding.ts](src/utils/edgeRounding.ts) | rdzeń: `roundEdges`, zagęszczanie pasa, naprawa, raport |
+| [src/utils/meshTopology.ts](src/utils/meshTopology.ts) | spawanie, topologia, diagnostyka, objętość/pole |
+| [src/utils/meshIO.ts](src/utils/meshIO.ts) | STL/OBJ/3MF → dane siatki |
+| [src/utils/meshExport.ts](src/utils/meshExport.ts) | eksport binarny STL i OBJ |
+| [src/utils/meshClearance.ts](src/utils/meshClearance.ts) | wolny odstęp / analiza luzu geometrycznego |
+| [src/utils/printability.ts](src/utils/printability.ts) | reguły druku, nawisy, raport drukowalności |
+| [src/utils/printParams.ts](src/utils/printParams.ts) | parametry i presety UI (dysza, promień, formatowanie) |
+| [src/utils/meshTypes.ts](src/utils/meshTypes.ts) | kontrakty typów pipeline'u i raportu |
+| [app/geometry.py](app/geometry.py) | diagnostyka siatki w Pythonie (stdlib-only) |
+| [app/main.py](app/main.py) | opcjonalna warstwa HTTP FastAPI; `/api/process` zwraca 501 |
+| [scripts/verify_backend.py](scripts/verify_backend.py) | porównanie diagnostyki Python ↔ TypeScript |
+| [tests/](tests) | agregator `tests/all.test.ts` i zestawy funkcjonalne/UI |
+| [scripts/ssr-smoke.mjs](scripts/ssr-smoke.mjs) | smoke test renderu UI (SSR) |
 
-### Serwer referencyjny (`app/main.py`)
+### Serwer referencyjny (`app/`)
 
 To **nie jest** część ścieżki użytkownika — aplikacja jest w 100% klientowa.
-Serwer istnieje jako niezależna kontrola poprawności: parsuje STL (binarny i ASCII),
-spawa wierzchołki i liczy diagnostykę. Endpoint `/api/process` **celowo zwraca 501**:
-zaokrąglanie żyje w TypeScripcie, a udawanie drugiej implementacji algorytmu byłoby
-gorsze niż jej brak.
+Diagnostyka w Pythonie jest wydzielona do [app/geometry.py](app/geometry.py)
+(tylko biblioteka standardowa), a [app/main.py](app/main.py) to opcjonalna warstwa HTTP
+(FastAPI) z endpointem `/api/process` zwracającym **501**: zaokrąglanie żyje w TypeScripcie.
 
 ```bash
-python app/main.py                                  # serwer na :8000
 python scripts/verify_backend.py                    # Python vs TypeScript, model po modelu
+python app/main.py                                  # opcjonalny serwer na :8000 (wymaga FastAPI)
 ```
 
-## 7. Testy
+## 7. Testy i CI
 
 ```bash
-npm test           # 50 testów, ~9 s, w procesie Node (bez przeglądarki)
-npm run test:ssr   # render UI + 5 sprawdzeń HTML
 npm run lint       # oxlint
-npx tsc -b         # typy
-npm run build      # produkcja do dist/
+npm run typecheck  # tsc -b
+npm test           # node tests/all.test.ts (agregator, jeden proces)
+npm run test:ssr   # render/smoke UI przez scripts/ssr-smoke.mjs
+npm run build      # tsc -b && vite build
+python scripts/verify_backend.py   # Python (app/geometry.py) vs TS
 ```
 
-Stan na ostatni przebieg: **50/50 testów, 0 ostrzeżeń lint, build 845 kB (231 kB gzip)**.
+Stan zweryfikowany (2026-11-12): **lint 0**, **`tsc -b` czysto**, **`node tests/all.test.ts` 79/79**,
+**`npm run test:ssr` 7/7**, **`npm run build` OK**, **`python scripts/verify_backend.py` OK**.
 
-Dwie pułapki środowiskowe warte zapamiętania: `node --test` nie działa w tym
-środowisku (`spawn EPERM` przy przechwytywaniu stdio), dlatego `tests/all.test.ts`
-uruchamia wszystkie zestawy w jednym procesie; a Node nie zaimportuje `.tsx`
-(JSX nie przechodzi type-strippingu), dlatego interfejs weryfikujemy buildem SSR.
+CI: [.github/workflows/ci.yml](.github/workflows/ci.yml) uruchamia lint, typecheck, testy,
+smoke SSR i build (Node 22.18.0 i 24) oraz osobny job weryfikacji Pythona.
+
+Uwagi środowiskowe: `node --test` bywa niedostępny w tym środowisku (`spawn EPERM` przy
+przechwytywaniu stdio), dlatego testy uruchamia agregator `tests/all.test.ts`; Node nie
+importuje `.tsx`, więc interfejs weryfikujemy przez build/SSR smoke.
 
 ## 8. Ograniczenia
 
-- Zaokrąglanie jest **lokalne** — dwie równoległe krawędzie bliżej niż `2r` od siebie
-  dostaną fillet przycięty do połowy odstępu, nie jeden wspólny „rowek".
-- Modele o bardzo drobnej siatce (setki tysięcy trójkątów) działają, ale w przeglądarce
-  odczuwalnie wolniej; pas jest subdzielony tylko lokalnie, więc narzut rośnie
-  liniowo od długości zaznaczonych krawędzi.
-- Eksport obsługuje STL i OBJ. 3MF jest w planach.
-- Nie ma (jeszcze) zmiennego promienia na jednej krawędzi ani wykrywania kolizji
-  filletów między sobą.
+- Przetwarzanie w UI nadal działa w głównym wątku z debounce; **Web Worker (zadanie 6)** nie jest
+  jeszcze wdrożony.
+- Zaokrąglanie jest lokalne i zależne od geometrii/siatki — promień może zostać ograniczony
+  (np. kąt, odstęp/clearance), a część krawędzi może pozostać nieprzetworzona; patrz raport.
+- Nawisy są analizowane i pokazywane, ale aplikacja nie generuje podpór ani nie zmienia orientacji.
+- Eksport: STL i OBJ. Import obsługuje m.in. STL/OBJ/3MF.
+- Audyt drukowalności (`docs/audit/printability-audit.md`) zawiera dalsze punkty do domknięcia;
+  dokumentacja opisuje stan aktualny, nie docelowy.
 
 ## 9. Źródła
 

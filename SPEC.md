@@ -5,26 +5,32 @@
 **Data:** 2026-06-27
 **Status:** Specyfikacja produktowo-techniczna gotowa do wdrożenia
 
-> ### ⚠️ Stan implementacji (2026)
+> ### ⚠️ Stan implementacji (aktualizacja 2026-11-12)
 >
-> Specyfikacja opisuje **docelowy produkt komercyjny** (backend FastAPI + MeshLib +
-> Celery/Redis + S3). Zaimplementowana aplikacja jest **w 100% klientowa** i nie
-> korzysta z żadnego z tych komponentów — to świadoma decyzja: model nie opuszcza
-> komputera użytkownika, nie ma kosztów infrastruktury i nie ma kolejki.
+> Specyfikacja opisuje **docelowy produkt**. Zaimplementowana aplikacja jest **w 100% klientowa**
+> (React 19 + TypeScript + Vite + three.js), bez backendu przetwarzania, kolejki i storage.
+> Model nie opuszcza komputera użytkownika.
 >
-> W związku z tym **rozstrzygające są poniższe różnice**:
+> **Zaimplementowane (stan bieżący):**
+> - rdzeń zaokrąglania w [src/utils/edgeRounding.ts](src/utils/edgeRounding.ts) (fillet/chamfer, lokalne zagęszczanie pasa, raport z polami m.in. `edgesRounded`, `geometryChanged`, `failed`, `failedEdgeIndices`, `measuredSurfaceError`, `radiusClampReason`, `bandFacetSize`); eksport blokowany przy `failed`;
+> - moduły drukowalności: [src/utils/meshClearance.ts](src/utils/meshClearance.ts), [src/utils/printability.ts](src/utils/printability.ts) (min. promień `2 × dysza`, opcje dysz, analiza nawisów), [src/utils/printParams.ts](src/utils/printParams.ts);
+> - GUI przebudowane w stylu PrintFins: **dark-only, canvas-first**, górny pasek (dysza/promień, import/eksport), pływające szyny (statystyki, opcje/krawędzie/nawisy, status/ostrzeżenia), karta startowa, porównanie before/after/overlay, pokaz `measuredSurfaceError`;
+> - diagnostyka Python wydzielona: [app/geometry.py](app/geometry.py) (stdlib-only) + [app/main.py](app/main.py) (opcjonalny HTTP, `/api/process` → 501); weryfikacja `python scripts/verify_backend.py`;
+> - bramki (2026-11-12): lint 0, `tsc -b` czysto, `node tests/all.test.ts` 79/79, `npm run test:ssr` 7/7, build OK, verify_backend OK; CI w `.github/workflows/ci.yml`.
+>
+> **Nadal niezaimplementowane / docelowe:** Web Worker dla przetwarzania (zadanie 6 planu), pełne domknięcie punktów audytu (`docs/audit/printability-audit.md`), export 3MF, asynchroniczna kolejka/infra z §5–6, część funkcji faz 2–3. Import obsługuje m.in. STL/OBJ/3MF; eksport: STL/OBJ.
+>
+> **Rozbieżności względem poniższych sekcji (nadal obowiązujące):**
 >
 > | Sekcja SPEC | Stan faktyczny |
 > |---|---|
-> | §5.1 backend FastAPI/MeshLib, §5.2 diagram architektury, §5.3 pseudokod MeshLib | **Nieaktualne.** Rdzeń to [src/utils/edgeRounding.ts](src/utils/edgeRounding.ts): dokładny fillet metodą toczącej się kuli (opening/closing przecięcia półprzestrzeni), bez MeshLib i bez wokselizacji. `app/main.py` to wyłącznie opcjonalny serwer referencyjny do diagnostyki; `/api/process` zwraca 501. |
-> | §4.2 Ekran 4 „Processing (asynchroniczny)", §6.1 „Processing async, job queue" | **Nieaktualne.** Przetwarzanie jest synchroniczne, w przeglądarce, z debounce 90 ms i wskaźnikiem zajętości. |
-> | §6.1 „Auto-detect krawędzi > 60°" | Próg domyślny to **30°** (regulowany) — 60° przepuszczało krawędzie, które dla oka są już ostre. |
-> | §6.1 „Download STL/3MF" | Zaimplementowane **STL i OBJ**; 3MF pozostaje w planach. |
-> | §6.1 „Live preview: overlay przed/po" | Zaimplementowane jako tabela porównawcza przed/po + jednoczesny podgląd obu siatek. |
-> | §7.2 kolory krawędzi | Zaimplementowane; automatycznie wykryte ostre krawędzie idą do wspólnego zbioru zaznaczenia. |
+> | §5.1–§5.3 backend FastAPI/MeshLib, architektura/queue | Brak w ścieżce produktu; rdzeń w TS, diagnostyka Python rozdzielona (`app/geometry.py` / `app/main.py`). |
+> | §4.2 Ekran 4 „Processing (asynchroniczny)", §6.1 job queue | Przetwarzanie lokalne, synchroniczne w ścieżce UI z debounce 90 ms (bez workera). |
+> | §6.1 „Auto-detect krawędzi > 60°" | Próg domyślny **30°** (regulowany). |
+> | §6.1 „Download STL/3MF" | Eksport **STL i OBJ**; 3MF w planach. |
+> | §6.1 / §7 presety, kolory, live preview, motyw | Presety/parametry i układ wg aktualnego UI (dark-only, dysza, min. promień 2×dysza); overlay before/after; semantyka raportu oparta na zmierzonych polach. Szczegóły: README/MEMORY. |
 >
-> Faktyczne gwarancje algorytmu, parametry druku i sposób uruchomienia opisuje
-> [README.md](README.md); niezmienniki i pułapki implementacyjne — [MEMORY.md](MEMORY.md).
+> Faktyczne gwarancje i sposób uruchomienia: [README.md](README.md). Niezmienniki/pułapki: [MEMORY.md](MEMORY.md). Plan prac: `docs/superpowers/plans/2026-11-12-printability-rework.md`.
 
 ---
 
@@ -110,7 +116,12 @@ Na podstawie źródeł (Pollen AM, BigRep, Markforged, DfAM guides):
 5. Pobierz wynik (STL/3MF)
 6. *Czas: 2-3 minuty, zero wiedzy technicznej*
 
-### 4.2. Szczegółowy user flow (krok po kroku)
+### 4.2. Szczegółowy user flow — docelowy (stan faktyczny opisany w nocie na górze)
+
+> **Stan 2026-11-12:** flow zrealizowany w jednym widoku canvas-first (bez osobnych ekranów/kolejki):
+> import → selekcja → parametry (dysza, promień ≥ 2×dysza, typ, segmenty, presety, próg) →
+> lokalne przeliczenie z debounce → status/ostrzeżenia/nawisy/`measuredSurfaceError` i porównanie →
+> eksport STL/OBJ (blokowany przy `failed`). Szczegóły: `src/App.tsx`, `src/components/*`, README.
 
 ```
 ┌──────────────────────────────────────────────────────────────┐
@@ -322,21 +333,25 @@ def round_edges(input_path, selected_edges, radius_mm, fillet_type):
 
 ## 6. Funkcjonalności — pełna lista
 
-### 6.1. MVP (Faza 1, 8-12 tygodni)
+### 6.1. MVP (Faza 1, 8-12 tygodni) — lista docelowa vs stan
+
+> **Stan 2026-11-12:** wiele pozycji P0/P1 jest zrealizowanych w wariancie klientowym (bez kont/queue),
+> ale szczegóły różnią się od tabeli (np. próg 30°, dysza + min. promień 2×dysza, eksport STL/OBJ,
+> raport/ostrzeżenia/nawisy, UI canvas-first). Web Worker i 3MF-export pozostają otwarte.
 
 | Priorytet | Funkcja | Opis |
 |---|---|---|
 | P0 | Upload STL/OBJ/3MF | Drag & drop, walidacja, limit 50 MB |
 | P0 | Viewer 3D | Obrót, zoom, pan, podświetlenie krawędzi |
 | P0 | Selekcja krawędzi (klik) | Pojedyncza krawędź, multi-select |
-| P0 | Auto-detect ostrych krawędzi | Kąt > 60° domyślnie, regulowany |
+| P0 | Auto-detect ostrych krawędzi | **Stan:** próg domyślny 30° (regulowany) |
 | P0 | Fillet (zaokrąglenie okrągłe) | Suwak promienia 0.1-10 mm |
 | P0 | Chamfer (ścięcie) | Suwak rozmiaru 0.1-10 mm |
 | P0 | Live preview | Overlay przed/po |
-| P0 | Processing async | Job queue, status polling |
-| P0 | Download STL/3MF | Wynik gotowy do druku |
+| P0 | Processing async | **Docelowo** job queue; **stan:** lokalne, debounce 90 ms, bez Web Workera |
+| P0 | Download STL/3MF | **Stan:** eksport STL/OBJ (3MF planowane) |
 | P0 | Walidacja wyniku | Manifold check, raport błędów |
-| P1 | Presety (Wytrzymałe/Estetyczne/Szybkie) | Predefiniowane konfiguracje |
+| P1 | Presety (Wytrzymałe/Estetyczne/Szybkie) | **Stan:** Bezpieczne/Wytrzymałe/Ścięcie 45°/Własne (`src/utils/printParams.ts`) |
 | P1 | Sugestie promienia | „Dla krawędzi 0.8 mm: zalecany promień 0.3 mm" |
 | P1 | Statystyki (trójkąty, rozmiar) | Porównanie przed/po |
 | P2 | Konto użytkownika | Historia, ponowne pobranie |
