@@ -29,7 +29,9 @@
  * wymiary. Tutaj:
  *   • przemieszczenie każdego wierzchołka jest wyprowadzone analitycznie (dokładny łuk),
  *   • wierzchołki poza pasmem krawędzi pozostają BIT-IDENTYCZNE z wejściem,
- *   • |Δ| ≤ min(r, 0.25·L_min_incident, maxDisplacement) — Hausdorff jest ograniczony.
+ *   • |Δ| ≤ min(r, maxDisplacement) — ruch ograniczony promieniem, niezależny od
+ *     gęstości siatki; przy ostrym kącie materiału promień jest dodatkowo przycięty
+ *     do wartości, dla której narożnik mieści się w tym budżecie (patrz `rFeat`).
  *
  * ZAGĘSZCZANIE
  * =======================================================================
@@ -40,13 +42,25 @@
  * (a więc i wymiary gabarytowe), a łuk ma wystarczającą liczbę wierzchołków.
  */
 
-import type { EdgeRecord, MeshData, RoundingOptions, RoundingReport, RoundingResult } from './meshTypes.ts';
+import type { EdgeRecord, MeshData, RoundingKind, RoundingOptions, RoundingReport, RoundingResult } from './meshTypes.ts';
 import { buildTopology, pointSegmentDistance, signedVolume } from './meshTopology.ts';
 
 const DEG = Math.PI / 180;
 /** cos(89°) — próg wykrycia odwrócenia normalnej trójkąta. */
 const FLIP_COS = 0.0175;
 const MAX_PLANES = 12;
+
+/** Liczba z przecinkiem dziesiętnym — tak, jak komunikaty dla użytkownika. */
+function plNum(value: number, digits = 2): string {
+  return value.toFixed(digits).replace('.', ',');
+}
+
+/** Polskie formy liczebnika "krawędź" zależnie od liczby. */
+function edgeWords(count: number): { noun: string; verb: string; pronoun: string } {
+  if (count === 1) return { noun: 'krawędź', verb: 'ma', pronoun: 'ją' };
+  if (count === 3 || count === 4) return { noun: 'krawędzie', verb: 'mają', pronoun: 'je' };
+  return { noun: 'krawędzi', verb: 'ma', pronoun: 'je' };
+}
 
 interface Feature {
   edgeIndex: number;
@@ -56,6 +70,8 @@ interface Feature {
   ax: number; ay: number; az: number;
   bx: number; by: number; bz: number;
   phi: number;
+  /** Efektywny promień tej cechy — przy ostrym kącie mniejszy niż globalny `size`. */
+  rFeat: number;
   reach: number;
   /** Odległość "wzdłuż łańcucha" od wolnego końca dla wierzchołka A (v0) i B (v1). */
   endA: number;
@@ -421,9 +437,6 @@ function solveSymmetric(G: Float64Array, n: number, rhs: Float64Array, out: Floa
 }
 
 /**
- * Przemieszczenie wierzchołka na powierzchnię filletu (dokładny łuk) lub chamferu.
- * Zwraca [dx,dy,dz] lub null gdy wierzchołek jest już na docelowej powierzchni.
- *
  * FILLET — środek kuli stycznej do wszystkich ścian leży w zbiorze
  *   C = { c : d_i(c) ≤ −r }  (krawędź wypukła, *opening*)
  *   C = { c : d_i(c) ≥ +r }  (krawędź wklęsła,  *closing*)
@@ -435,37 +448,21 @@ function solveSymmetric(G: Float64Array, n: number, rhs: Float64Array, out: Floa
  * prostopadłe (dla innych kątów dawało elipsę — patrz tests/rounding.test.ts,
  * „FILLET: dowolny kąt dwuścienny”).
  */
-function computeDisplacement(
+
+/**
+ * Rzut punktu na obszar środków kuli C. Zwraca wektor od punktu do środka
+ * (dla krawędzi wklęsłej odwrócony) albo null, gdy punkt już należy do C.
+ */
+function projectToCenters(
   planes: Float64Array,
   planeCount: number,
   convex: boolean,
-  kind: 'fillet' | 'chamfer',
   size: number,
   ws: FilletWorkspace,
-): [number, number, number] | null {
+): Float64Array | null {
   const m = planeCount;
   if (m === 0) return null;
 
-  if (kind === 'chamfer') {
-    let sum = 0;
-    let sx = 0, sy = 0, sz = 0;
-    for (let i = 0; i < m; i++) {
-      sum += planes[4 * i + 3];
-      sx += planes[4 * i];
-      sy += planes[4 * i + 1];
-      sz += planes[4 * i + 2];
-    }
-    const nlen = Math.hypot(sx, sy, sz);
-    if (nlen < 1e-12) return null;
-    // Płaszczyzna ścinająca: Σ d_i = -size (wypukła) albo +size (wklęsła).
-    // Ruch po normalnej Σn: zmiana Σd o s·|Σn|. Znak s mówi, czy wchodzimy w materiał.
-    const target = convex ? -size : size;
-    if (convex ? sum <= target : sum >= target) return null;
-    const s = (target - sum) / nlen;
-    return [(sx / nlen) * s, (sy / nlen) * s, (sz / nlen) * s];
-  }
-
-  // --- Fillet: rzut na obszar środków kuli --------------------------------
   const { u, lambda, rhs, gram, aug, active, flag } = ws;
   for (let i = 0; i < m; i++) {
     const d = planes[4 * i + 3];
@@ -548,12 +545,196 @@ function computeDisplacement(
 
   const dist = Math.hypot(vx, vy, vz);
   if (!(dist > 0) || !Number.isFinite(dist)) return null;
+
+  const out = new Float64Array(3);
+  out[0] = vx; out[1] = vy; out[2] = vz;
+  return out;
+}
+
+/**
+ * Odległość punktu od idealnej powierzchni filletu (0, gdy punkt już na niej leży).
+ * Wydzielone z `computeDisplacement`, żeby zmierzyć błąd powierzchni bez liczenia
+ * przemieszczenia po raz drugi.
+ */
+function distanceToFilletSurface(
+  planes: Float64Array,
+  planeCount: number,
+  convex: boolean,
+  size: number,
+  ws: FilletWorkspace,
+): number | null {
+  const v = projectToCenters(planes, planeCount, convex, size, ws);
+  if (!v) return null;
+  const dist = Math.hypot(v[0], v[1], v[2]);
+  if (!Number.isFinite(dist)) return null;
+  return Math.abs(dist - size);
+}
+
+function computeDisplacement(
+  planes: Float64Array,
+  planeCount: number,
+  convex: boolean,
+  kind: 'fillet' | 'chamfer',
+  size: number,
+  ws: FilletWorkspace,
+): [number, number, number] | null {
+  const m = planeCount;
+  if (m === 0) return null;
+
+  if (kind === 'chamfer') {
+    let sum = 0;
+    let sx = 0, sy = 0, sz = 0;
+    for (let i = 0; i < m; i++) {
+      sum += planes[4 * i + 3];
+      sx += planes[4 * i];
+      sy += planes[4 * i + 1];
+      sz += planes[4 * i + 2];
+    }
+    const nlen = Math.hypot(sx, sy, sz);
+    if (nlen < 1e-12) return null;
+    // Płaszczyzna ścinająca: Σ d_i = -size (wypukła) albo +size (wklęsła).
+    // Ruch po normalnej Σn: zmiana Σd o s·|Σn|. Znak s mówi, czy wchodzimy w materiał.
+    const target = convex ? -size : size;
+    if (convex ? sum <= target : sum >= target) return null;
+    const s = (target - sum) / nlen;
+    return [(sx / nlen) * s, (sy / nlen) * s, (sz / nlen) * s];
+  }
+
+  // --- Fillet: rzut na obszar środków kuli --------------------------------
+  const v = projectToCenters(planes, planeCount, convex, size, ws);
+  if (!v) return null;
+  const dist = Math.hypot(v[0], v[1], v[2]);
   // Oba przypadki: punkt leży już na powierzchni (|v| ≤ r) albo jest poza pasmem.
   // Wypukła: |v| ≤ r → punkt wewnątrz bryły idealnej. Wklęsła: |v| ≤ r → punkt poza
   // obszarem dokładanego materiału. Różnica jest tylko w znaku kierunku (wyżej).
   if (dist <= size * (1 + 1e-12)) return null;
   const s = 1 - size / dist;
-  return [vx * s, vy * s, vz * s];
+  return [v[0] * s, v[1] * s, v[2] * s];
+}
+
+/** Dane o najbliższej cechy — wypełniane przez `collectPlanes` (bez alokacji w pętli). */
+interface NearestInfo {
+  /** Indeks najbliższej cechy (-1 gdy punkt jest poza pasem). */
+  index: number;
+  /** Odległość punktu od odcinka cechy. */
+  distance: number;
+  /** Parametr rzutu punktu na odcinek cechy. */
+  t: number;
+  /** Czy cecha jest wypukła. */
+  convex: boolean;
+  /** Efektywny promień tej cechy. */
+  radius: number;
+}
+
+/**
+ * Zbiera płaszczyzny ograniczające punkt i zapamiętuje najbliższą cechę.
+ * Zwraca liczbę zebranych płaszczyzn.
+ */
+function collectPlanes(
+  grid: FeatureGrid,
+  features: Feature[],
+  x: number, y: number, z: number,
+  maxReach: number,
+  planes: Float64Array,
+  candidates: number[],
+  distBuf: Float64Array,
+  out: NearestInfo,
+): number {
+  out.index = -1;
+  const found = grid.query(x, y, z, maxReach, candidates);
+  if (found.length === 0) return 0;
+  const near = nearestSegment(features, found, x, y, z, distBuf);
+  if (near.index < 0) return 0;
+  const nearest = features[near.index];
+  if (near.distance > nearest.reach) return 0;
+
+  out.index = near.index;
+  out.distance = near.distance;
+  out.t = near.t;
+  out.convex = nearest.convex;
+  out.radius = nearest.rFeat;
+
+  const convex = nearest.convex;
+  let count = 0;
+  for (let i = 0; i < found.length && count < MAX_PLANES; i++) {
+    const fi = found[i];
+    const f = features[fi];
+    if (f.convex !== convex) continue;
+    if (distBuf[fi] > f.reach) continue;
+    const guard = 0.25 * f.reach;
+    // Odrzucenie płaszczyzn "drugiej strony" cienkiej ściany — test POŁOŻENIA, nie
+    // normalnej wierzchołka: wierzchołek leżący na jednej ze ścian filletu ma
+    // normalną tej ściany, więc iloczyn z normalną drugiej ściany wynosi
+    // cos(180° − θ) < −0.35 dla każdego θ < 69.5° — druga ściana była odrzucana,
+    // ściana nie zjeżdżała na łuk, a powierzchnia była łamaną zamiast łukiem
+    // (AUD-002).
+    const d0 = (x - f.p0x) * f.n0x + (y - f.p0y) * f.n0y + (z - f.p0z) * f.n0z;
+    const d1 = (x - f.p1x) * f.n1x + (y - f.p1y) * f.n1y + (z - f.p1z) * f.n1z;
+    if (convex) {
+      if (d0 > guard || d1 > guard) continue;
+    } else {
+      if (d0 < -guard || d1 < -guard) continue;
+    }
+    if (pushPlane(planes, count, f.n0x, f.n0y, f.n0z, d0)) count++;
+    if (count < MAX_PLANES && pushPlane(planes, count, f.n1x, f.n1y, f.n1z, d1)) count++;
+  }
+  return count;
+}
+
+/**
+ * Zmierzony błąd powierzchni w paście (AUD-008). `chordDeviation` to teoria dla
+ * nieskończonie gęstej siatki; realna powierzchnia to cięciwy, więc błąd mierzymy:
+ * dla każdego trójkąta mającego wierzchołek w paście bierzemy środek i liczymy jego
+ * odległość od idealnej powierzchni filletu (tymi samymi płaszczyznami, których
+ * użył ten wierzchołek).
+ */
+function measureSurfaceError(
+  work: MeshData,
+  positions: Float64Array,
+  bandPlaneOffset: Int32Array,
+  bandPlaneCount: Int32Array,
+  bandPlanes: number[],
+  featureOfVertex: Int32Array,
+  features: Feature[],
+  kind: RoundingKind,
+  ws: FilletWorkspace,
+): number {
+  if (kind !== 'fillet') return 0; // pomiar dotyczy powierzchni filletu
+  const scratch = new Float64Array(MAX_PLANES * 4);
+  let maxErr = 0;
+  for (let f = 0; f < work.faceCount; f++) {
+    const a = work.faces[3 * f], b = work.faces[3 * f + 1], c = work.faces[3 * f + 2];
+    let v = -1;
+    if (bandPlaneCount[a] > 0) v = a;
+    else if (bandPlaneCount[b] > 0) v = b;
+    else if (bandPlaneCount[c] > 0) v = c;
+    if (v < 0) continue;
+    const fi = featureOfVertex[v];
+    if (fi < 0) continue;
+    const feat = features[fi];
+
+    // Środek trójkąta w pozycjach końcowych.
+    const cx = (positions[3 * a] + positions[3 * b] + positions[3 * c]) / 3;
+    const cy = (positions[3 * a + 1] + positions[3 * b + 1] + positions[3 * c + 1]) / 3;
+    const cz = (positions[3 * a + 2] + positions[3 * b + 2] + positions[3 * c + 2]) / 3;
+
+    // Płaszczyzny zapisano dla pierwotnej pozycji wierzchołka — przenosimy ich
+    // odsunięcie (d) na środek trójkąta.
+    const off = bandPlaneOffset[v];
+    const count = bandPlaneCount[v];
+    const vx = work.positions[3 * v], vy = work.positions[3 * v + 1], vz = work.positions[3 * v + 2];
+    for (let i = 0; i < count; i++) {
+      const nx = bandPlanes[off + 4 * i], ny = bandPlanes[off + 4 * i + 1], nz = bandPlanes[off + 4 * i + 2];
+      scratch[4 * i] = nx;
+      scratch[4 * i + 1] = ny;
+      scratch[4 * i + 2] = nz;
+      scratch[4 * i + 3] = bandPlanes[off + 4 * i + 3] + (cx - vx) * nx + (cy - vy) * ny + (cz - vz) * nz;
+    }
+    const dist = distanceToFilletSurface(scratch, count, feat.convex, feat.rFeat, ws);
+    if (dist === null) continue;
+    if (dist > maxErr) maxErr = dist;
+  }
+  return maxErr;
 }
 
 /** Główna operacja: zaokrąglenie lub ścięcie zaznaczonych krawędzi. */
@@ -606,6 +787,12 @@ export function roundEdges(mesh: MeshData, options: RoundingOptions): RoundingRe
     chordDeviation: 0,
     bandFacetSize: 0,
     refinementLimitedByBudget: false,
+    edgesRounded: 0,
+    geometryChanged: false,
+    failed: false,
+    failedEdgeIndices: [],
+    measuredSurfaceError: 0,
+    radiusClampReason: null,
     warnings,
     ...extra,
   });
@@ -642,8 +829,7 @@ export function roundEdges(mesh: MeshData, options: RoundingOptions): RoundingRe
   const minIncident = computeMinIncidentEdge(mesh, isFeatureEdge);
   // Używamy 5. percentyla, nie absolutnego minimum: w realnych plikach STL zdarzają się
   // pojedyncze "słiverowe" krawędzie (0.01 mm), które nie opisują żadnej realnej cechy,
-  // a zablokowałyby całą operację. Twarde ograniczenie per-wierzchołek
-  // (Δ ≤ 0.25·L_min_incident) i tak chroni te miejsca lokalnie.
+  // a zablokowałyby całą operację.
   const incidentSamples: number[] = [];
   for (const e of chosen) {
     for (const v of [e.v0, e.v1]) {
@@ -661,11 +847,12 @@ export function roundEdges(mesh: MeshData, options: RoundingOptions): RoundingRe
   let effectiveRadius = radiusRequested;
   // Górne ograniczenie promienia: mediana lokalnej skali (odporna na pojedyncze
   // "słiverowe" krawędzie, które zablokowałyby całą operację) oraz połowa najmniejszego
-  // gabarytu (fillet nie może przekroczyć rozmiaru części). Twarda ochrona lokalna
-  // działa dodatkowo per-wierzchołek: Δ ≤ 0.25·L_min_incident(v).
+  // gabarytu (fillet nie może przekroczyć rozmiaru części).
   const radiusCap = Math.min(0.5 * medianIncident, 0.5 * minBboxDim);
+  let radiusClampReason: RoundingReport['radiusClampReason'] = null;
   if (radiusCap < effectiveRadius) {
     effectiveRadius = Math.max(1e-4, radiusCap);
+    radiusClampReason = 'edge-length';
     warnings.push(
       `Promień ograniczony do ${effectiveRadius.toFixed(3)} mm (żądano ${radiusRequested.toFixed(2)} mm) — ` +
       'większy promień przekroczyłby lokalną skalę modelu i zniszczył sąsiednie cechy.',
@@ -675,19 +862,28 @@ export function roundEdges(mesh: MeshData, options: RoundingOptions): RoundingRe
 
   // --- 3. Cechy + siatka przestrzenna ---------------------------------------
   let maxReach = size;
-  let minPhi = Math.PI;
+  // Kąt łuku filletu to kąt MATERIAŁU θ = π − φ, a nie kąt między normalnymi ścian
+  // (AUD-010): dla klina 30° (φ = 150°) pas ma być dzielony na 30°, nie na 150°.
+  let minTheta = Math.PI;
   const featureSpecs: Array<Omit<Feature, 'endA' | 'endB'>> = [];
   for (const e of chosen) {
     const f0 = e.faces[0];
     const f1 = e.faces[1];
     const p0x = mesh.positions[3 * e.v0], p0y = mesh.positions[3 * e.v0 + 1], p0z = mesh.positions[3 * e.v0 + 2];
     const phi = Math.max(1e-3, e.normalAngle);
-    minPhi = Math.min(minPhi, phi);
     const theta = Math.PI - phi;
+    minTheta = Math.min(minTheta, theta);
     const halfTan = Math.tan(Math.max(theta, 1e-3) * 0.5);
     const setback = halfTan > 1e-6 ? size / halfTan : size * 4;
     const reach = Math.min(Math.max(size, setback), size * 4);
     maxReach = Math.max(maxReach, reach);
+    // Największy promień, przy którym narożnik przesunie się o nie więcej niż `size`:
+    //   r/sin(θ/2) − r ≤ size  ⇒  r ≤ size·sin(θ/2)/(1 − sin(θ/2))
+    // Dla θ ≥ 60° ograniczenie jest bezskuteczne (rMax ≥ size), dla θ = 45° wynosi
+    // 0.62·size, dla θ = 30° — 0.35·size (AUD-001).
+    const sinHalf = Math.sin(theta / 2);
+    const denom = 1 - sinHalf;
+    const rMaxAngle = denom > 1e-9 ? (size * sinHalf) / denom : size;
     featureSpecs.push({
       edgeIndex: e.index,
       convex: e.isConvex,
@@ -698,6 +894,7 @@ export function roundEdges(mesh: MeshData, options: RoundingOptions): RoundingRe
       ax: p0x, ay: p0y, az: p0z,
       bx: mesh.positions[3 * e.v1], by: mesh.positions[3 * e.v1 + 1], bz: mesh.positions[3 * e.v1 + 2],
       phi,
+      rFeat: Math.min(size, rMaxAngle),
       reach,
     });
   }
@@ -708,6 +905,27 @@ export function roundEdges(mesh: MeshData, options: RoundingOptions): RoundingRe
     endA: chainDistance ? chainDistance[i * 2] : Infinity,
     endB: chainDistance ? chainDistance[i * 2 + 1] : Infinity,
   }));
+
+  // Kąt materiału poniżej 60° — pełny promień jest geometrycznie niemożliwy:
+  // narożnik musiałby się przesunąć o r/sin(θ/2) − r, czyli więcej niż `size`.
+  // Zaokrąglamy wtedy mniejszym promieniem i mówimy o tym wprost (AUD-001) — dawniej
+  // ostrzeżenie twierdziło, że promień jest mniejszy, a był większy.
+  let acuteCount = 0;
+  let acuteRadius = Infinity;
+  for (const f of features) {
+    if (f.rFeat < size - 1e-12) {
+      acuteCount++;
+      acuteRadius = Math.min(acuteRadius, f.rFeat);
+    }
+  }
+  if (acuteCount > 0) {
+    radiusClampReason = 'acute-angle';
+    const w = edgeWords(acuteCount);
+    warnings.push(
+      `${acuteCount} ${w.noun} ${w.verb} kąt zbyt ostry na pełny promień ${plNum(size)} mm — ` +
+      `zaokrąglono ${w.pronoun} promieniem ${plNum(acuteRadius)} mm (kąt materiału poniżej 60°).`,
+    );
+  }
 
   let taperLength = 0;
   if (chainDistance) {
@@ -735,7 +953,7 @@ export function roundEdges(mesh: MeshData, options: RoundingOptions): RoundingRe
   }
 
   // --- 4. Rozdzielczość łuku ------------------------------------------------
-  const arcAngle = Math.max(15 * DEG, Math.min(minPhi, Math.PI));
+  const arcAngle = Math.max(15 * DEG, Math.min(minTheta, Math.PI));
   let targetLength = (size * arcAngle) / segments;
   targetLength = Math.max(targetLength, size * 0.02, diag * 1e-5);
   const refineRadius = maxReach * 1.15 + targetLength * 2;
@@ -751,68 +969,62 @@ export function roundEdges(mesh: MeshData, options: RoundingOptions): RoundingRe
   const moved = new Uint8Array(work.vertexCount);
   /** Wierzchołki w zasięgu zaokrąglania — do pomiaru realnej rozdzielczości pasa. */
   const inBand = new Uint8Array(work.vertexCount);
+  /** Cechy, do której należy wierzchołek — do zliczenia faktycznie zaokrąglonych krawędzi. */
+  const featureOfVertex = new Int32Array(work.vertexCount).fill(-1);
+  /** Płaszczyzny użyte dla wierzchołków pasa — do pomiaru błędu powierzchni. */
+  const bandPlanes: number[] = [];
+  const bandPlaneOffset = new Int32Array(work.vertexCount).fill(-1);
+  const bandPlaneCount = new Int32Array(work.vertexCount);
   const candidates: number[] = [];
   const distBuf = new Float64Array(Math.max(features.length, 1));
   const planes = new Float64Array(MAX_PLANES * 4);
   const filletWork = createFilletWorkspace();
   const maxDisplacementCap = options.maxDisplacement ?? Infinity;
+  const nearInfo: NearestInfo = { index: -1, distance: 0, t: 0, convex: true, radius: size };
 
   let movedCount = 0;
   let clampedCount = 0;
   let maxDisp = 0;
+  let maxRawDisp = 0;
   let sumSq = 0;
-  const processedSet = new Set<number>();
+  // Twarde ograniczenie przemieszczenia: |Δ| ≤ min(r, cap). Limit oparty na długości
+  // krawędzi siatki (0.25·L_min_incident) mylił rozdzielczość siatki z rozmiarem cechy
+  // i gwarantował zbyt mały łuk (AUD-003).
+  const localLimit = Math.min(size, maxDisplacementCap);
 
   for (let v = 0; v < work.vertexCount; v++) {
     const px = work.positions[3 * v];
     const py = work.positions[3 * v + 1];
     const pz = work.positions[3 * v + 2];
-    const vnx = work.vertexNormals[3 * v];
-    const vny = work.vertexNormals[3 * v + 1];
-    const vnz = work.vertexNormals[3 * v + 2];
 
-    const found = grid.query(px, py, pz, maxReach, candidates);
-    if (found.length === 0) continue;
-
-    const near = nearestSegment(features, found, px, py, pz, distBuf);
-    if (near.index < 0) continue;
-    const nearestFeature = features[near.index];
-    if (near.distance > nearestFeature.reach) continue;
+    const planeCount = collectPlanes(
+      grid, features, px, py, pz, maxReach, planes, candidates, distBuf, nearInfo,
+    );
+    if (nearInfo.index < 0) continue;
     inBand[v] = 1;
-    const convex = nearestFeature.convex;
-
-    // Zbierz płaszczyzny ograniczające (bez duplikatów).
-    let planeCount = 0;
-    for (let i = 0; i < found.length && planeCount < MAX_PLANES; i++) {
-      const fi = found[i];
-      const f = features[fi];
-      if (f.convex !== convex) continue;
-      if (distBuf[fi] > f.reach) continue;
-      const guard = 0.25 * f.reach;
-      // Odrzucenie płaszczyzn "drugiej strony" cienkiej ściany.
-      if (vnx * f.n0x + vny * f.n0y + vnz * f.n0z < -0.35) continue;
-      if (vnx * f.n1x + vny * f.n1y + vnz * f.n1z < -0.35) continue;
-      const d0 = (px - f.p0x) * f.n0x + (py - f.p0y) * f.n0y + (pz - f.p0z) * f.n0z;
-      const d1 = (px - f.p1x) * f.n1x + (py - f.p1y) * f.n1y + (pz - f.p1z) * f.n1z;
-      if (convex) {
-        if (d0 > guard || d1 > guard) continue;
-      } else {
-        if (d0 < -guard || d1 < -guard) continue;
-      }
-      if (pushPlane(planes, planeCount, f.n0x, f.n0y, f.n0z, d0)) planeCount++;
-      if (planeCount < MAX_PLANES && pushPlane(planes, planeCount, f.n1x, f.n1y, f.n1z, d1)) planeCount++;
-    }
+    featureOfVertex[v] = nearInfo.index;
     if (planeCount === 0) continue;
 
-    const delta = computeDisplacement(planes, planeCount, convex, kind, size, filletWork);
+    // Zapamiętujemy płaszczyzny wierzchołka — tymi samymi liczymy potem błąd
+    // powierzchni trójkątów pasa (AUD-008).
+    bandPlaneOffset[v] = bandPlanes.length;
+    bandPlaneCount[v] = planeCount;
+    for (let i = 0; i < planeCount * 4; i++) bandPlanes.push(planes[i]);
+
+    const convex = nearInfo.convex;
+    // Promień efektywny TEJ cechy: przy ostrym kącie materiału pełny promień jest
+    // geometrycznie niemożliwy (narożnik musiałby się przesunąć o r/sin(θ/2) − r),
+    // więc używamy mniejszego promienia zgodnego z budżetem przemieszczenia.
+    const rFeat = kind === 'fillet' ? nearInfo.radius : size;
+    const delta = computeDisplacement(planes, planeCount, convex, kind, rFeat, filletWork);
     if (!delta) continue;
 
     let dx = delta[0], dy = delta[1], dz = delta[2];
 
     // Wygaszanie na końcach łańcuchów krawędzi (fillet "run-out").
     if (taperLength > 0) {
-      const f = nearestFeature;
-      const along = f.endA + (f.endB - f.endA) * near.t;
+      const f = features[nearInfo.index];
+      const along = f.endA + (f.endB - f.endA) * nearInfo.t;
       if (Number.isFinite(along)) {
         const w = smoothstep01(along / taperLength);
         if (w <= 0) continue;
@@ -820,10 +1032,8 @@ export function roundEdges(mesh: MeshData, options: RoundingOptions): RoundingRe
       }
     }
 
-    // Twarde ograniczenie przemieszczenia: |Δ| ≤ min(r, 0.25·L_min_incident, cap).
-    const minEdge = refined.origMinEdge[v] > 0 ? refined.origMinEdge[v] : size;
-    const localLimit = Math.min(size, 0.25 * minEdge, maxDisplacementCap);
     let len = Math.hypot(dx, dy, dz);
+    if (len > maxRawDisp) maxRawDisp = len;
     if (len > localLimit && len > 0) {
       const k = localLimit / len;
       dx *= k; dy *= k; dz *= k;
@@ -839,7 +1049,6 @@ export function roundEdges(mesh: MeshData, options: RoundingOptions): RoundingRe
     movedCount++;
     sumSq += len * len;
     if (len > maxDisp) maxDisp = len;
-    processedSet.add(nearestFeature.edgeIndex);
   }
 
   // Realna rozdzielczość pasa: najdłuższa krawędź, której choć jeden koniec leży
@@ -854,7 +1063,7 @@ export function roundEdges(mesh: MeshData, options: RoundingOptions): RoundingRe
   if (movedCount === 0) {
     warnings.push(
       'Nie znaleziono wierzchołków wymagających przesunięcia — promień jest mniejszy niż ' +
-      'lokalna rozdzielczość siatki. Zwiększ promień lub liczbę segmentów.',
+      'lokalna rozdielczość siatki. Zwiększ promień lub liczbę segmentów.',
     );
     return {
       mesh,
@@ -867,6 +1076,7 @@ export function roundEdges(mesh: MeshData, options: RoundingOptions): RoundingRe
         refinementLimitedByBudget: refined.limitedByBudget,
         bandFacetSize,
         trianglesAfter: work.faceCount,
+        failed: true,
       }),
     };
   }
@@ -941,7 +1151,44 @@ export function roundEdges(mesh: MeshData, options: RoundingOptions): RoundingRe
       'przywrócono pierwotną geometrię. Zmniejsz promień albo liczbę segmentów.',
     );
   }
+  // --- Stan końcowy: co NAPRAWDĘ zostało zaokrąglone -------------------------
+  // Liczymy po fakcie: "przesunięty" to wierzchołek, który w wyniku końcowym ma
+  // scale > 0. Wcześniejszy licznik liczył krawędzie mające wierzchołek w paście
+  // (AUD-004/AUD-007): raportował "zaokrąglono 21 z 24", a nie ruszył się żaden
+  // wierzchołek.
+  let movedFinalCount = 0;
+  const featureMoved = new Uint8Array(features.length);
+  const featureAssigned = new Int32Array(features.length);
+  const featureReverted = new Int32Array(features.length);
+  for (let v = 0; v < work.vertexCount; v++) {
+    if (!moved[v]) continue;
+    const fi = featureOfVertex[v];
+    if (fi < 0) continue;
+    featureAssigned[fi]++;
+    if (scale[v] <= 0) { featureReverted[fi]++; continue; }
+    movedFinalCount++;
+    featureMoved[fi] = 1;
+  }
+  let edgesRounded = 0;
+  for (let i = 0; i < features.length; i++) if (featureMoved[i]) edgesRounded++;
+  const failedEdgeIndices: number[] = [];
+  for (let i = 0; i < features.length; i++) {
+    if (featureAssigned[i] > 0 && featureAssigned[i] === featureReverted[i]) {
+      failedEdgeIndices.push(features[i].edgeIndex);
+    }
+  }
+  const geometryChanged = movedFinalCount > 0;
+  // Wycofanie wszystkiego = brak przesuniętych wierzchołków = operacja nieskuteczna.
+  const failed = !geometryChanged;
+
   const resultMesh = buildTopology(newPositions, work.faces);
+
+  // Zmierzony (nie teoretyczny) błąd powierzchni w paście: `chordDeviation` to
+  // teoria dla nieskończonie gęstej siatki, a realna powierzchnia to cięciwy (AUD-008).
+  const measuredSurfaceError = measureSurfaceError(
+    work, newPositions, bandPlaneOffset, bandPlaneCount, bandPlanes, featureOfVertex,
+    features, kind, filletWork,
+  );
 
   // --- 8. Weryfikacja i raport ---------------------------------------------
   let flipped = 0;
@@ -981,9 +1228,13 @@ export function roundEdges(mesh: MeshData, options: RoundingOptions): RoundingRe
     );
   }
   if (clampedCount > 0) {
+    // Podajemy konkretne liczby: limit przemieszczenia i zadany promień. Dawniej
+    // ostrzeżenie twierdziło bezwarunkowo, że promień jest "mniejszy niż zadany",
+    // a przy ostrym kącie był większy (AUD-001).
     warnings.push(
-      `${clampedCount} wierzchołków miało ograniczone przemieszczenie (ochrona przed flipami) — ` +
-      'wynikowy promień jest tam mniejszy niż zadany.',
+      `${clampedCount} wierzchołków miało przemieszczenie ograniczone do ${plNum(localLimit, 3)} mm ` +
+      `(największe z ${plNum(maxRawDisp, 3)} mm) — łuk jest tam płytszy niż zadany ` +
+      `${plNum(radiusRequested)} mm.`,
     );
   }
   if (relaxedCount > 0 && revertedCount === 0) {
@@ -1035,14 +1286,14 @@ export function roundEdges(mesh: MeshData, options: RoundingOptions): RoundingRe
       effectiveRadius: size,
       segments,
       selectedEdgeCount: requested.length,
-      processedEdgeCount: processedSet.size,
+      processedEdgeCount: edgesRounded,
       skippedFlatEdgeCount: skippedFlat,
       skippedBoundaryEdgeCount: skippedBoundary,
       skippedShortEdgeCount: 0,
       refinementLevels: refined.levels,
       trianglesBefore: mesh.faceCount,
       trianglesAfter: resultMesh.faceCount,
-      movedVertexCount: movedCount,
+      movedVertexCount: movedFinalCount,
       clampedVertexCount: clampedCount,
       relaxedVertexCount: relaxedCount,
       revertedVertexCount: revertedCount,
@@ -1058,6 +1309,12 @@ export function roundEdges(mesh: MeshData, options: RoundingOptions): RoundingRe
       chordDeviation,
       bandFacetSize,
       refinementLimitedByBudget: refined.limitedByBudget,
+      edgesRounded,
+      geometryChanged,
+      failed,
+      failedEdgeIndices,
+      measuredSurfaceError,
+      radiusClampReason,
       warnings,
     },
   };

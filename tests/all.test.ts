@@ -10,6 +10,9 @@
 import './topology.test.ts';
 import './refinement.test.ts';
 import './rounding.test.ts';
+import './fillet-core.test.ts';
+import './clearance.test.ts';
+import './printability.test.ts';
 import './realmodels.test.ts';
 import './pipeline.test.ts';
 import './ui.test.ts';

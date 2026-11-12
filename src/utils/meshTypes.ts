@@ -167,6 +167,18 @@ export interface RoundingReport {
   bandFacetSize: number;
   /** Czy zagęszczanie pasa przerwał limit trójkątów (wynik rzadszy niż żądany). */
   refinementLimitedByBudget: boolean;
+  /** Krawędzie, których wierzchołki FAKTYCZNIE się przesunęły w wyniku końcowym. */
+  edgesRounded: number;
+  /** Czy zmieniono geometrię (false = operacja została wycofana). */
+  geometryChanged: boolean;
+  /** Czy operację wycofano, bo powstały złe ściany. */
+  failed: boolean;
+  /** Krawędzie wycofane (indeksy w MeshData.edges). */
+  failedEdgeIndices: number[];
+  /** Zmierzony (nie teoretyczny) błąd powierzchni w paście (mm). */
+  measuredSurfaceError: number;
+  /** Dlaczego promień został przycięty. */
+  radiusClampReason: 'edge-length' | 'acute-angle' | 'clearance' | null;
   warnings: string[];
 }
 
