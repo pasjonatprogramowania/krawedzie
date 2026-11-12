@@ -42,8 +42,10 @@ try {
   const html = renderToStaticMarkup(createElement(App));
   const checks = [
     ['nagłówek "RoundEdge"', html.includes('RoundEdge')],
-    ['ekran startowy "Rozpocznij tutaj"', html.includes('Rozpocznij tutaj')],
-    ['viewport "Oczekiwanie na model 3D"', html.includes('Oczekiwanie na model 3D')],
+    ['karta startowa "Zaokrągl narożniki przed drukiem"', html.includes('Zaokrągl narożniki przed drukiem')],
+    ['przycisk Import', html.includes('Import')],
+    ['selektor dyszy', html.includes('Dysza')],
+    ['przycisk pobrania STL', html.includes('Pobierz STL')],
     ['przycisk demo kostki', html.includes('Kostka 20 mm')],
     ['informacja o lokalnym przetwarzaniu', html.includes('Wszystkie obliczenia lokalnie')],
   ];
