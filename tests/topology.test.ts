@@ -223,3 +223,28 @@ test('manifoldReport z helperów zgadza się z diagnostyką produkcyjną', () =>
   const vol = volumeOf(positions, indices);
   assert.ok(Math.abs(vol - 10 * 14 * 18) < 1e-6, `objętość ${vol}`);
 });
+
+test('naprawa orientacji: dwie rozłączne bryły — odwrócona mniejsza zostaje odwrócona na zewnątrz', () => {
+  const big = makeBox(20, 20, 20, 1);   // V = +8000
+  const small = makeBox(10, 10, 10, 1); // po odwróceniu V = -1000
+  const pos: number[] = [];
+  const idx: number[] = [];
+  for (let i = 0; i < big.positions.length; i += 3) {
+    pos.push(big.positions[i], big.positions[i + 1], big.positions[i + 2]);
+  }
+  for (let i = 0; i < big.indices.length; i++) idx.push(big.indices[i]);
+  const base = pos.length / 3;
+  for (let i = 0; i < small.positions.length; i += 3) {
+    pos.push(small.positions[i] + 50, small.positions[i + 1], small.positions[i + 2]);
+  }
+  // Odwracamy winding mniejszej bryły.
+  for (let f = 0; f < small.indices.length; f += 3) {
+    idx.push(base + small.indices[f], base + small.indices[f + 2], base + small.indices[f + 1]);
+  }
+  const welded = weldTriangleSoup(Float64Array.from(pos), 1e-6, Int32Array.from(idx));
+  const broken = buildTopology(welded.positions, welded.faces);
+  assert.ok(signedVolume(broken) > 6500 && signedVolume(broken) < 7500);
+  const fixed = orientFacesConsistently(broken);
+  assert.ok(Math.abs(signedVolume(fixed) - 9000) < 1e-6, `objętość po naprawie: ${signedVolume(fixed)}`);
+});
+

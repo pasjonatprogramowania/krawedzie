@@ -16,6 +16,7 @@ import {
   buildTopology,
   computeDiagnostics,
   orientFacesConsistently,
+  signedVolume,
   weldTriangleSoup,
 } from './meshTopology.ts';
 
@@ -159,12 +160,15 @@ export function buildMeshFromRaw(
   }
   const picked = best ?? fallback!;
 
-  // Naprawa orientacji tylko gdy jest co naprawiać.
+  // Naprawa orientacji: niespójne nawinięcie lub globalnie odwrócony model.
   let mesh = picked.mesh;
   let repaired = false;
-  if ((options.repairOrientation ?? true) && mesh.inconsistentWindingCount > 0) {
-    const fixed = orientFacesConsistently(mesh);
-    if (fixed !== mesh) { mesh = fixed; repaired = true; }
+  if (options.repairOrientation ?? true) {
+    const vol = signedVolume(mesh);
+    if (mesh.inconsistentWindingCount > 0 || (mesh.faceCount > 0 && Number.isFinite(vol) && vol < 0)) {
+      const fixed = orientFacesConsistently(mesh);
+      if (fixed !== mesh) { mesh = fixed; repaired = true; }
+    }
   }
 
   const diagnostics = computeDiagnostics(mesh, {

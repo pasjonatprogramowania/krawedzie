@@ -39,8 +39,6 @@ export interface ClearanceGrid {
 
 /** Tolerancja barycentryczna — łapie przecięcia dokładnie na krawędzi trójkąta. */
 const TRI_EPS = 1e-9;
-/** Próg „promień jest równoległy do płaszczyzny trójkąta" (skalowany długością krawędzi). */
-const PARALLEL_EPS = 1e-12;
 
 /**
  * Buduje siatkę przestrzenną nad trójkątami i udostępnia odpytywanie odległości.
@@ -90,7 +88,7 @@ export function buildClearanceGrid(mesh: MeshData): ClearanceGrid {
   const tv0 = new Float64Array(total * 3);
   const te1 = new Float64Array(total * 3);
   const te2 = new Float64Array(total * 3);
-  const tscale = new Float64Array(total);
+  const tnorm = new Float64Array(total);
   const cells = new Map<number, number[]>();
   let triCount = 0;
 
@@ -115,7 +113,7 @@ export function buildClearanceGrid(mesh: MeshData): ClearanceGrid {
     tv0[3 * t] = ax; tv0[3 * t + 1] = ay; tv0[3 * t + 2] = az;
     te1[3 * t] = ux; te1[3 * t + 1] = uy; te1[3 * t + 2] = uz;
     te2[3 * t] = vx; te2[3 * t + 1] = vy; te2[3 * t + 2] = vz;
-    tscale[t] = l1 * l2;
+    tnorm[t] = nlen;
 
     // Trójkąt trafia do KAŻDEJ komórki, którą obejmuje jego AABB — inaczej
     // promień przeciąłby trójkąt, nie odwiedzając jego komórki.
@@ -236,7 +234,9 @@ export function buildClearanceGrid(mesh: MeshData): ClearanceGrid {
     triQuery++;
     const tq = triQuery;
     let t = tmin;
+    let best = limit;
     for (;;) {
+      const tExit = Math.min(tMaxX, tMaxY, tMaxZ);
       if (cx >= 0 && cx < nx && cy >= 0 && cy < ny && cz >= 0 && cz < nz) {
         const bucket = cells.get(cx + nx * (cy + ny * cz));
         if (bucket) {
@@ -256,8 +256,8 @@ export function buildClearanceGrid(mesh: MeshData): ClearanceGrid {
             const pvy = uz * e2x - ux * e2z;
             const pvz = ux * e2y - uy * e2x;
             const det = e1x * pvx + e1y * pvy + e1z * pvz;
-            // Promień równoległy do płaszczyzny trójkąta — brak wiarygodnego przecięcia.
-            if (Math.abs(det) <= PARALLEL_EPS * tscale[ti]) continue;
+            // Promień równoległy / styczny do płaszczyzny trójkąta (np. szum float32 na sąsiedniej ścianie).
+            if (Math.abs(det) <= 1e-3 * tnorm[ti]) continue;
             const invDet = 1 / det;
             const tvx = x - tv0[o], tvy = y - tv0[o + 1], tvz = z - tv0[o + 2];
             const bu = (tvx * pvx + tvy * pvy + tvz * pvz) * invDet;
@@ -269,12 +269,12 @@ export function buildClearanceGrid(mesh: MeshData): ClearanceGrid {
             if (bv < -TRI_EPS || bu + bv > 1 + TRI_EPS) continue;
             const hit = (e2x * qvx + e2y * qvy + e2z * qvz) * invDet;
             if (hit <= eps || hit > limit) continue;
-            // Komórki odwiedzamy w kolejności rosnącego t, więc pierwsze
-            // trafienie jest najbliższe.
-            return hit;
+            if (hit < best) best = hit;
           }
         }
       }
+      // Najbliższe trafienie w tej/ wcześniejszych komórkach jest pewne, gdy mieści się przed wyjściem.
+      if (best <= tExit) return best;
 
       if (tMaxX <= tMaxY && tMaxX <= tMaxZ) {
         cx += ux > 0 ? 1 : -1;
@@ -291,7 +291,7 @@ export function buildClearanceGrid(mesh: MeshData): ClearanceGrid {
       }
       if (t > tmax) break;
     }
-    return limit;
+    return best;
   };
 
   // Promień z krawędzi nie może być dłuższy niż przekątna bbox (obie jego
@@ -300,28 +300,45 @@ export function buildClearanceGrid(mesh: MeshData): ClearanceGrid {
 
   const edgeClearance = (edge: EdgeRecord): number => {
     const incident = edge.faces;
-    if (!incident || incident.length === 0) return 0;
+    if (!incident || incident.length < 2) return 0;
     const p0 = 3 * edge.v0, p1 = 3 * edge.v1;
+    const ex = positions[p1] - positions[p0];
+    const ey = positions[p1 + 1] - positions[p0 + 1];
+    const ez = positions[p1 + 2] - positions[p0 + 2];
+    const elenSq = ex * ex + ey * ey + ez * ez;
     const mx = (positions[p0] + positions[p1]) * 0.5;
     const my = (positions[p0 + 1] + positions[p1 + 1]) * 0.5;
     const mz = (positions[p0 + 2] + positions[p1 + 2]) * 0.5;
     const skip = [edge.v0, edge.v1];
 
-    // Promienie w głąb materiału (wzdłuż -normalnych obu ścian).
+    // Wypukła: w głąb materiału (−n). Wklęsła: w obszar dokładanego materiału (+n).
+    const sign = edge.isConvex ? -1 : 1;
     let best = Infinity;
-    const count = Math.min(2, incident.length);
-    for (let k = 0; k < count; k++) {
+    for (let k = 0; k < 2; k++) {
       const face = incident[k];
-      const distance = rayDistance(
-        mx, my, mz,
-        -faceNormals[3 * face], -faceNormals[3 * face + 1], -faceNormals[3 * face + 2],
+      let ox = mx, oy = my, oz = mz;
+      if (elenSq > 0 && face * 3 + 2 < faces.length) {
+        const a = faces[3 * face], b = faces[3 * face + 1], c = faces[3 * face + 2];
+        const w = (a !== edge.v0 && a !== edge.v1) ? a : (b !== edge.v0 && b !== edge.v1) ? b : c;
+        const wx = positions[3 * w] - mx, wy = positions[3 * w + 1] - my, wz = positions[3 * w + 2] - mz;
+        const proj = (wx * ex + wy * ey + wz * ez) / elenSq;
+        const px = wx - proj * ex, py = wy - proj * ey, pz = wz - proj * ez;
+        const plen = Math.hypot(px, py, pz);
+        if (plen > 0) {
+          const delta = Math.min(diag * 1e-4, plen * 0.25);
+          ox += (px / plen) * delta;
+          oy += (py / plen) * delta;
+          oz += (pz / plen) * delta;
+        }
+      }
+      const d = rayDistance(
+        ox, oy, oz,
+        sign * faceNormals[3 * face], sign * faceNormals[3 * face + 1], sign * faceNormals[3 * face + 2],
         skip, rayLimit,
       );
-      if (distance < best) best = distance;
+      if (d < best) best = d;
     }
-    if (!Number.isFinite(best)) return 0;
-    // Fillet wchodzi w materiał promieniem r, więc dopuszczalny promień
-    // to połowa odległości do przeciwległej ściany.
+    if (!Number.isFinite(best) || best >= rayLimit) return 0;
     return best * 0.5;
   };
 

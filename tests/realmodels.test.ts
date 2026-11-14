@@ -174,3 +174,139 @@ function asMesh(m: MeshData): Int32Array {
   return Int32Array.from(m.faces);
 }
 void asMesh;
+
+test('REAL: pranie.stl r=1.6 — pas dobrze zagęszczony i bez zamarzania długich sąsiednich ścian', () => {
+  const raw = loadPublicStl('pranie.stl');
+  const { mesh } = buildMeshFromRaw(raw.positions, null);
+  const sharp = mesh.edges.filter((e) => e.normalAngle > (30 * Math.PI) / 180 && e.faces.length === 2);
+
+  const { report } = roundEdges(mesh, {
+    radius: 1.6,
+    segments: 5,
+    kind: 'fillet',
+    edgeIndices: sharp.map((e) => e.index),
+  });
+
+  assert.equal(report.flippedFaceCount, 0);
+  assert.equal(report.degenerateFaceCount, 0);
+  assert.equal(report.radiusClampReason, null, `nieoczekiwane przycięcie promienia: ${report.radiusClampReason}`);
+  assert.equal(report.refinementLimitedByBudget, false, 'pas nie powinien wyczerpać budżetu 60k trójkątów');
+  assert.ok(report.bandFacetSize < 5, `za duże fasety w pasie: ${report.bandFacetSize.toFixed(2)} mm`);
+  assert.ok(report.measuredSurfaceError < 0.5, `za duży błąd powierzchni: ${report.measuredSurfaceError.toFixed(3)} mm`);
+  assert.ok(
+    !report.warnings.some((w) => /ograniczone do 1[,.]600 mm.*z 1[,.]/.test(w)),
+    `niespójne ostrzeżenie o limicie przemieszczenia: ${report.warnings.join(' | ')}`,
+  );
+});
+
+test('REAL: pranie.stl r=1.75 seg=3 — brak zaokrąglania szwów i ukrytych krawędzi między powłokami', () => {
+  const raw = loadPublicStl('pranie.stl');
+  const { mesh } = buildMeshFromRaw(raw.positions, null);
+  const sharp = mesh.edges.filter((e) => e.normalAngle >= (30 * Math.PI) / 180 && e.faces.length === 2);
+
+  const { mesh: result, report } = roundEdges(mesh, {
+    radius: 1.75,
+    segments: 3,
+    kind: 'fillet',
+    edgeIndices: sharp.map((e) => e.index),
+  });
+
+  assert.equal(report.flippedFaceCount, 0);
+  assert.equal(report.degenerateFaceCount, 0);
+
+  const dispOfOrig = (v: number) => Math.hypot(
+    result.positions[3 * v] - mesh.positions[3 * v],
+    result.positions[3 * v + 1] - mesh.positions[3 * v + 1],
+    result.positions[3 * v + 2] - mesh.positions[3 * v + 2],
+  );
+
+  // Wierzchołki 106 i 107 na końcu powłoki 4 schowanym wewnątrz powłoki 3 nie mogą się ruszyć.
+  for (const v of [106, 107]) {
+    assert.ok(dispOfOrig(v) < 1e-4, `ukryty wierzchołek v${v} nie powinien się ruszyć (disp=${dispOfOrig(v).toFixed(4)})`);
+  }
+
+  // Wierzchołki 86 i 95 leżą na ciągłych szynach prostoliniowych przez styk powłok 1–2–3:
+  // zamiast dołka 3D narożnika (~1.281 mm) mają przesuwać się po walcu r*(√2−1) ≈ 0.725 mm.
+  const cylDisp = 1.75 * (Math.SQRT2 - 1);
+  for (const v of [86, 95]) {
+    const d = dispOfOrig(v);
+    assert.ok(Math.abs(d - cylDisp) < 0.08, `v${v}: oczekiwano ~${cylDisp.toFixed(3)} mm na ciągłej szynie, było ${d.toFixed(4)} mm`);
+  }
+});
+
+test('REAL: pranie.stl r=1.38 seg=3 — symetryczne zmiękczenie takich samych krawędzi i brak załamań we wcięciach', () => {
+  const raw = loadPublicStl('pranie.stl');
+  const { mesh } = buildMeshFromRaw(raw.positions, null);
+  const sharp = mesh.edges.filter((e) => e.normalAngle >= (30 * Math.PI) / 180 && e.faces.length === 2);
+
+  const { mesh: result, report } = roundEdges(mesh, {
+    radius: 1.38,
+    segments: 3,
+    kind: 'fillet',
+    edgeIndices: sharp.map((e) => e.index),
+  });
+
+  assert.equal(report.flippedFaceCount, 0);
+  assert.equal(report.degenerateFaceCount, 0);
+
+  const dispOfOrig = (v: number) => Math.hypot(
+    result.positions[3 * v] - mesh.positions[3 * v],
+    result.positions[3 * v + 1] - mesh.positions[3 * v + 1],
+    result.positions[3 * v + 2] - mesh.positions[3 * v + 2],
+  );
+
+  // 1. Symetryczne wierzchołki fazowania na ukośnym uchwycie: v61, v63, v67, v68 (~0.5715 mm).
+  // Przed poprawką v61 zapadał się do 0.0372 mm przez niesparowany podział trójkąta igłowego f163.
+  const bevelMidDisps = [61, 63, 67, 68].map(dispOfOrig);
+  for (let i = 0; i < bevelMidDisps.length; i++) {
+    assert.ok(
+      bevelMidDisps[i] >= 0.52,
+      `wierzchołek fazowania v${[61, 63, 67, 68][i]} zapadł się: disp=${bevelMidDisps[i].toFixed(4)} mm`,
+    );
+  }
+  assert.ok(
+    Math.max(...bevelMidDisps) - Math.min(...bevelMidDisps) < 0.04,
+    `asymetryczne zmiękczenie fazowania [61,63,67,68]: ${bevelMidDisps.map((d) => d.toFixed(4)).join(', ')}`,
+  );
+
+  // 2. Symetryczne narożniki fazowania: v59, v64, v66, v69 (~1.010 mm).
+  // Przed poprawką v66 spadał do 0.8869 mm przez łańcuchowe sklejanie wierzchołków w coalesceNearDuplicates.
+  const bevelCornerDisps = [59, 64, 66, 69].map(dispOfOrig);
+  assert.ok(
+    Math.max(...bevelCornerDisps) - Math.min(...bevelCornerDisps) < 0.04,
+    `asymetryczne narożniki fazowania [59,64,66,69]: ${bevelCornerDisps.map((d) => d.toFixed(4)).join(', ')}`,
+  );
+
+  // 3. Bliźniacze długie krawędzie ramienia e79 (v37-v41) i e81 (v43-v44) muszą być zmiękczone jednakowo
+  // na całym odcinku wewnętrznym t in [0.1, 0.85] (przed poprawką e79 zapadała się do 0.125 mm przy t=0.05..0.19).
+  assert.equal(report.relaxedVertexCount, 0, `nie powinno być zrelaksowanych wierzchołków przy r=1.38 (było ${report.relaxedVertexCount})`);
+  const edgeMinDisps: number[] = [];
+  for (const [va, vb, label] of [[37, 41, 'e79'], [43, 44, 'e81']] as const) {
+    const ax = mesh.positions[3 * va], ay = mesh.positions[3 * va + 1], az = mesh.positions[3 * va + 2];
+    const bx = mesh.positions[3 * vb] - ax, by = mesh.positions[3 * vb + 1] - ay, bz = mesh.positions[3 * vb + 2] - az;
+    const len2 = bx * bx + by * by + bz * bz;
+    let minInteriorDisp = Infinity;
+    for (let v = 0; v < result.vertexCount; v++) {
+      const px = result.positions[3 * v] - ax;
+      const py = result.positions[3 * v + 1] - ay;
+      const pz = result.positions[3 * v + 2] - az;
+      const t = (px * bx + py * by + pz * bz) / len2;
+      if (t < 0.1 || t > 0.85) continue;
+      const cx = px - t * bx, cy = py - t * by, cz = pz - t * bz;
+      const distToLine = Math.hypot(cx, cy, cz);
+      if (distToLine < minInteriorDisp) minInteriorDisp = distToLine;
+    }
+    assert.ok(
+      minInteriorDisp >= 0.52,
+      `krawędź ${label} zapadła się w środku do ${minInteriorDisp.toFixed(4)} mm (oczekiwano >= 0.52 mm)`,
+    );
+    edgeMinDisps.push(minInteriorDisp);
+  }
+  assert.ok(
+    Math.abs(edgeMinDisps[0] - edgeMinDisps[1]) < 0.02,
+    `bliźniacze krawędzie e79 i e81 mają różne zmiękczenie: ${edgeMinDisps.map((d) => d.toFixed(4)).join(' vs ')}`,
+  );
+});
+
+
+

@@ -127,7 +127,8 @@ export function weldTriangleSoup(
   const src = facesIn ?? null;
   const triangleCount = src ? Math.floor(src.length / 3) : Math.floor(rawVertexCount / 3);
   const outFaces: number[] = [];
-  const seen = new Set<number>();
+  // Dwupoziomowa mapa unika przepełnienia Number.MAX_SAFE_INTEGER dla > 208k wierzchołków.
+  const seen = new Map<number, Set<number>>();
   let degenerateFacesRemoved = 0;
   let duplicateFacesRemoved = 0;
 
@@ -142,16 +143,20 @@ export function weldTriangleSoup(
       degenerateFacesRemoved++;
       continue;
     }
-    // Klucz niezależny od kolejności i od punktu startowego.
     const lo = Math.min(a, b, c);
     const hi = Math.max(a, b, c);
     const mid = a + b + c - lo - hi;
-    const key = (lo * vertexCount + mid) * vertexCount + hi;
-    if (seen.has(key)) {
+    const subKey = mid * vertexCount + hi;
+    let bucket = seen.get(lo);
+    if (bucket && bucket.has(subKey)) {
       duplicateFacesRemoved++;
       continue;
     }
-    seen.add(key);
+    if (!bucket) {
+      bucket = new Set<number>();
+      seen.set(lo, bucket);
+    }
+    bucket.add(subKey);
     outFaces.push(a, b, c);
   }
 
@@ -575,8 +580,10 @@ export function orientFacesConsistently(mesh: MeshData): MeshData {
     cursor[f1]++;
   }
 
+  const faces = mesh.faces.slice();
   const flip = new Int8Array(faceCount).fill(-1);
   const queue = new Int32Array(faceCount);
+  let needFlip = false;
   for (let seed = 0; seed < faceCount; seed++) {
     if (flip[seed] !== -1) continue;
     flip[seed] = 0;
@@ -595,33 +602,32 @@ export function orientFacesConsistently(mesh: MeshData): MeshData {
         }
       }
     }
-  }
 
-  let needFlip = false;
-  for (let f = 0; f < faceCount; f++) if (flip[f] === 1) needFlip = true;
-
-  const faces = mesh.faces.slice();
-  if (needFlip) {
-    for (let f = 0; f < faceCount; f++) {
-      if (flip[f] !== 1) continue;
+    // Sprawdź orientację tej konkretnej składowej spójnej niezależnie od pozostałych.
+    let compVol6 = 0;
+    for (let q = 0; q < qt; q++) {
+      const f = queue[q];
+      const a = faces[3 * f];
+      const b = flip[f] === 1 ? faces[3 * f + 2] : faces[3 * f + 1];
+      const c = flip[f] === 1 ? faces[3 * f + 1] : faces[3 * f + 2];
+      const ax = mesh.positions[3 * a], ay = mesh.positions[3 * a + 1], az = mesh.positions[3 * a + 2];
+      const bx = mesh.positions[3 * b], by = mesh.positions[3 * b + 1], bz = mesh.positions[3 * b + 2];
+      const cx = mesh.positions[3 * c], cy = mesh.positions[3 * c + 1], cz = mesh.positions[3 * c + 2];
+      compVol6 += ax * (by * cz - bz * cy) + ay * (bz * cx - bx * cz) + az * (bx * cy - by * cx);
+    }
+    const invertComp = compVol6 < 0;
+    for (let q = 0; q < qt; q++) {
+      const f = queue[q];
+      const wantFlip = invertComp ? flip[f] === 0 : flip[f] === 1;
+      if (!wantFlip) continue;
+      needFlip = true;
       const t = faces[3 * f + 1];
       faces[3 * f + 1] = faces[3 * f + 2];
       faces[3 * f + 2] = t;
     }
   }
 
-  // Sprawdź globalną orientację po naprawie.
-  const test = needFlip ? buildTopology(mesh.positions, faces) : mesh;
-  if (signedVolume(test) < 0) {
-    const all = test.faces.slice();
-    for (let f = 0; f < test.faceCount; f++) {
-      const t = all[3 * f + 1];
-      all[3 * f + 1] = all[3 * f + 2];
-      all[3 * f + 2] = t;
-    }
-    return buildTopology(test.positions, all);
-  }
-  return test;
+  return needFlip ? buildTopology(mesh.positions, faces) : mesh;
 }
 
 function sameDirection(mesh: MeshData, v0: number, v1: number, f0: number, f1: number): boolean {

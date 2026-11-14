@@ -20,7 +20,8 @@ import {
   roundEdges,
 } from './utils/meshProcessing.ts';
 import type { MeshData, MeshDiagnostics, RoundingResult } from './utils/meshProcessing.ts';
-import { analyzeOverhangs, overhangAreaMm2 } from './utils/printability.ts';
+import { analyzeOverhangs } from './utils/printability.ts';
+import type { WorkerRequest, WorkerResponse } from './workers/rounding.worker.ts';
 import {
   DEFAULT_NOZZLE_MM,
   DEFAULT_RADIUS_MM,
@@ -71,20 +72,41 @@ export default function App() {
   const [toasts, setToasts] = useState<ToastItem[]>([]);
   const toastSeq = useRef(0);
   const toastSeen = useRef(new Set<string>());
+  const toastTimers = useRef(new Map<number, number>());
+  const toastTexts = useRef(new Map<number, string>());
   const loadSeq = useRef(0);
+
+  useEffect(() => () => {
+    for (const timer of toastTimers.current.values()) window.clearTimeout(timer);
+    toastTimers.current.clear();
+  }, []);
 
   const pushToast = useCallback((kind: 'info' | 'warn' | 'ok', text: string, force = false) => {
     if (!force && toastSeen.current.has(text)) return;
     toastSeen.current.add(text);
     const id = ++toastSeq.current;
+    toastTexts.current.set(id, text);
     setToasts((prev) => [...prev.slice(-4), { id, kind, text }]);
-    window.setTimeout(() => {
+    const timer = window.setTimeout(() => {
+      toastTimers.current.delete(id);
+      toastTexts.current.delete(id);
       setToasts((prev) => prev.filter((t) => t.id !== id));
       toastSeen.current.delete(text);
     }, TOAST_TTL_MS);
+    toastTimers.current.set(id, timer);
   }, []);
 
   const dismissToast = useCallback((id: number) => {
+    const timer = toastTimers.current.get(id);
+    if (timer !== undefined) {
+      window.clearTimeout(timer);
+      toastTimers.current.delete(id);
+    }
+    const text = toastTexts.current.get(id);
+    if (text !== undefined) {
+      toastSeen.current.delete(text);
+      toastTexts.current.delete(id);
+    }
     setToasts((prev) => prev.filter((t) => t.id !== id));
   }, []);
 
@@ -191,8 +213,6 @@ export default function App() {
       if (!response.ok) throw new Error('Nie udało się pobrać modelu demonstracyjnego.');
       const blob = await response.blob();
       if (seq !== loadSeq.current) return;
-      // loadMeshFromFile ustawi własny seq; cofamy, by nie przeskoczyć licznika.
-      loadSeq.current = seq - 1;
       loadMeshFromFile(new File([blob], name, { type: 'application/octet-stream' }));
     } catch (err) {
       if (seq !== loadSeq.current) return;
@@ -250,6 +270,8 @@ export default function App() {
 
   const handleClearSelection = () => setSelectedEdges(new Set());
 
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
   const handleReset = () => {
     setFile(null);
     setMeshData(null);
@@ -257,6 +279,7 @@ export default function App() {
     setResult(null);
     setSelectedEdges(new Set());
     setLoadError(null);
+    if (fileInputRef.current) fileInputRef.current.value = '';
   };
 
   const handlePresetChange = (id: PrintPresetId) => {
@@ -285,26 +308,73 @@ export default function App() {
     return arr.join(',');
   }, [selectedEdges]);
 
+  const workerRef = useRef<Worker | null>(null);
+  const roundSeq = useRef(0);
+
+  useEffect(() => () => {
+    workerRef.current?.terminate();
+    workerRef.current = null;
+  }, []);
+
   useEffect(() => {
     if (!meshData || selectedEdges.size === 0) {
+      roundSeq.current++;
       setResult(null);
       setBusy(false);
       return;
     }
+    const id = ++roundSeq.current;
     setBusy(true);
-    const timer = setTimeout(() => {
-      try {
-        const edgeIndices = selectionKey.length > 0 ? selectionKey.split(',').map(Number) : [];
-        const res = roundEdges(meshData, { radius, segments, kind, edgeIndices });
-        setResult(res);
-      } catch (err) {
-        pushToast('warn', `Błąd przetwarzania: ${(err as Error).message}`, true);
-        setResult(null);
-      } finally {
-        setBusy(false);
+    const timer = window.setTimeout(() => {
+      const edgeIndices = selectionKey.length > 0 ? selectionKey.split(',').map(Number) : [];
+      if (typeof Worker === 'undefined') {
+        try {
+          const res = roundEdges(meshData, { radius, segments, kind, edgeIndices });
+          if (id === roundSeq.current) setResult(res);
+        } catch (err) {
+          if (id === roundSeq.current) {
+            pushToast('warn', `Błąd przetwarzania: ${(err as Error).message}`, true);
+            setResult(null);
+          }
+        } finally {
+          if (id === roundSeq.current) setBusy(false);
+        }
+        return;
       }
-    }, 90);
-    return () => clearTimeout(timer);
+
+      if (!workerRef.current) {
+        workerRef.current = new Worker(new URL('./workers/rounding.worker.ts', import.meta.url), {
+          type: 'module',
+        });
+      }
+      const worker = workerRef.current;
+      worker.onmessage = (event: MessageEvent<WorkerResponse>) => {
+        const msg = event.data;
+        if (msg.id !== roundSeq.current) return;
+        if (msg.type === 'result') {
+          setResult({ mesh: msg.mesh, report: msg.report });
+        } else {
+          pushToast('warn', `Błąd przetwarzania: ${msg.message}`, true);
+          setResult(null);
+        }
+        setBusy(false);
+      };
+      worker.onerror = (event) => {
+        if (id !== roundSeq.current) return;
+        pushToast('warn', `Błąd workera: ${event.message || 'nieznany błąd'}`, true);
+        setResult(null);
+        setBusy(false);
+      };
+      const req: WorkerRequest = {
+        type: 'round',
+        id,
+        positions: meshData.positions,
+        indices: new Int32Array(meshData.faces),
+        options: { radius, segments, kind, edgeIndices },
+      };
+      worker.postMessage(req);
+    }, 150);
+    return () => window.clearTimeout(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [meshData, selectionKey, radius, segments, kind]);
 
@@ -390,8 +460,8 @@ export default function App() {
     [overhangSource],
   );
   const overhangArea = useMemo(
-    () => (overhangSource ? overhangAreaMm2(overhangSource, OVERHANG_ANGLE_DEG) : 0),
-    [overhangSource],
+    () => overhangs.reduce((sum, item) => sum + item.areaMm2, 0),
+    [overhangs],
   );
 
   // --- Komunikaty --------------------------------------------------------------
@@ -478,11 +548,15 @@ export default function App() {
       onDrop={handleDrop}
     >
       <input
+        ref={fileInputRef}
         type="file"
         id="model-file-input"
         accept=".stl,.3mf,.obj"
         className="hidden"
-        onChange={handleFileChange}
+        onChange={(e) => {
+          handleFileChange(e);
+          e.target.value = '';
+        }}
       />
 
       <div id="viewport" className="absolute inset-0 z-0 bg-surface-viewport">
@@ -522,6 +596,7 @@ export default function App() {
         onClearSelection={handleClearSelection}
         exportBlocked={exportBlocked}
         exportBlockedReason={exportBlockedReason}
+        hasResult={Boolean(result && result.report.geometryChanged && !result.report.failed)}
       />
 
       {isWide ? (

@@ -55,7 +55,11 @@ test('UI: geometria jest przebudowywana, gdy zmienia sie topologia (nie tylko po
     viewer.includes('meshToGeometry(shownMesh)'),
     'ThreeViewer musi przebudowac geometrie z calej siatki (po zaokragleniu zmienia sie liczba trojkatow)',
   );
-  assert.ok(viewer.includes('meshRef.current.geometry.dispose()'), 'stara geometria musi byc zwalniana');
+  assert.ok(viewer.includes('disposeMesh'), 'zasoby sceny muszą być zwalniane');
+  assert.ok(
+    viewer.includes('[meshRef, overlayRef, pickRef, edgesRef, gridRef]'),
+    'odmontowanie komponentu musi zwalniać geometrię i materiały wszystkich obiektów sceny',
+  );
   assert.ok(app.includes('setResult(null)'), 'zmiana parametrow/selekcji musi wyczyscic wynik');
 });
 
@@ -150,4 +154,11 @@ test('UI: dostepnosc - aria-label / aria-pressed / aria-live w TopBar, OptionsRa
   assert.ok(optionsRail.includes('aria-pressed') || app.includes('aria-pressed'), 'OptionsRail/App musi miec aria-pressed dla przelacznikow');
   assert.ok(viewBar.includes('aria-pressed') || viewBar.includes('aria-label'), 'ViewBar musi miec atrybuty dostepnosci');
   assert.ok(heroCard.includes('aria-live') || heroCard.includes('aria-label'), 'HeroCard musi miec aria-live lub aria-label');
+});
+
+test('UI: zaznaczona krawedz pozostaje wybieralna mimo podniesionego progu kata', () => {
+  assert.ok(
+    viewer.includes('selectedEdges.has(idx)'),
+    'klikniecie musi pozwolic odznaczyc juz zaznaczona krawedz, ktora przestala byc ostra',
+  );
 });

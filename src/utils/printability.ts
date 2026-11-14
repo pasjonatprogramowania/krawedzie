@@ -79,19 +79,30 @@ export interface OverhangFace {
 }
 
 /**
- * Zwraca ściany, które przy druku wymagają podparcia, czyli te, których
- * normalna odchodzi od osi budowania (+Z) o więcej niż `maxAngleFromVerticalDeg`.
+ * Zwraca ściany wymagające podparcia: skierowane w dół, odchylone od pionu
+ * bardziej niż `maxAngleFromVerticalDeg` (oś budowania +Z).
  */
 export function analyzeOverhangs(mesh: MeshData, maxAngleFromVerticalDeg: number): OverhangFace[] {
   const overhangs: OverhangFace[] = [];
-  const { faceNormals, faceAreas, faceCount } = mesh;
+  const { faceNormals, faceAreas, faceCount, positions, faces, bboxMin } = mesh;
+  const bedZ = bboxMin[2];
+  const epsBed = 1e-4 * Math.max(1, mesh.bboxMax[2] - bedZ);
   for (let f = 0; f < faceCount; f++) {
     const nz = faceNormals[3 * f + 2];
     // Ochrona przed NaN w siatkach z uszkodzonymi danymi (STL z zerowym polem).
     if (!Number.isFinite(nz)) continue;
     const clamped = Math.max(-1, Math.min(1, nz));
     const angleFromVerticalDeg = (Math.acos(clamped) * 180) / Math.PI;
-    if (angleFromVerticalDeg > maxAngleFromVerticalDeg) {
+    // Nawis FDM: normalna skierowana w dół (poza dnem na stole).
+    if (angleFromVerticalDeg <= 90) continue;
+    const a = 3 * faces[3 * f], b = 3 * faces[3 * f + 1], c = 3 * faces[3 * f + 2];
+    const za = positions[a + 2], zb = positions[b + 2], zc = positions[c + 2];
+    if (Math.abs(za - bedZ) <= epsBed && Math.abs(zb - bedZ) <= epsBed && Math.abs(zc - bedZ) <= epsBed) {
+      continue;
+    }
+    // downAngle = kąt normalnej od osi -Z (0° = sufit). Nawis gdy odchylenie od pionu > limit.
+    const downAngle = 180 - angleFromVerticalDeg;
+    if (downAngle < (90 - maxAngleFromVerticalDeg) - 1e-9) {
       overhangs.push({ faceIndex: f, angleFromVerticalDeg, areaMm2: faceAreas[f] });
     }
   }

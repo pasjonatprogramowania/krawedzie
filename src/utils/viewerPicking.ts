@@ -30,9 +30,16 @@ export function pickEdgeIndex(
     baseMesh.faces[3 * faceIndex + 1],
     baseMesh.faces[3 * faceIndex + 2],
   ];
+  const edgeLength = (u: number, v: number): number => Math.hypot(
+    baseMesh.positions[3 * u] - baseMesh.positions[3 * v],
+    baseMesh.positions[3 * u + 1] - baseMesh.positions[3 * v + 1],
+    baseMesh.positions[3 * u + 2] - baseMesh.positions[3 * v + 2],
+  );
+  let shortestEdge = Infinity;
   for (let k = 0; k < 3; k++) {
     const u = face[k];
     const v = face[(k + 1) % 3];
+    shortestEdge = Math.min(shortestEdge, edgeLength(u, v));
     const key = u < v ? u * baseMesh.vertexCount + v : v * baseMesh.vertexCount + u;
     const edgeIndex = baseMesh.edgeKeyToIndex.get(key);
     if (edgeIndex === undefined) continue;
@@ -45,12 +52,10 @@ export function pickEdgeIndex(
     if (d < bestDist) { bestDist = d; best = edgeIndex; }
   }
   if (best < 0) return null;
-  const maxDim = Math.max(
-    baseMesh.bboxMax[0] - baseMesh.bboxMin[0],
-    baseMesh.bboxMax[1] - baseMesh.bboxMin[1],
-    baseMesh.bboxMax[2] - baseMesh.bboxMin[2],
-  ) || 1;
-  return bestDist > maxDim * 0.35 ? null : best;
+  // Tolerancja kliknięcia zależy od rozmiaru trafionej ściany: w środku dużej,
+  // płaskiej ściany nie ma krawędzi, po której użytkownik mógłby trafić.
+  const maxDist = Math.max(0.05, shortestEdge * 0.2);
+  return bestDist > maxDist ? null : best;
 }
 
 export function buildEdgeLines(
@@ -93,8 +98,17 @@ export function buildEdgeLines(
   const geom = new THREE.BufferGeometry();
   geom.setAttribute('position', new THREE.Float32BufferAttribute(points, 3));
   geom.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
-  const mat = new THREE.LineBasicMaterial({ vertexColors: true, transparent: true, opacity: 0.95, depthWrite: false });
-  const lines = new THREE.LineSegments(geom, mat);
-  lines.scale.setScalar(1.0008);
-  return lines;
+  // `polygonOffset` odsuwa linie w głębi, nie zmieniając ich wierzchołków. Skalowanie
+  // obiektu (`scale.setScalar`) przesuwało linie względem ścian w bryłach oddalonych
+  // od początku układu współrzędnych (np. model w [100, 100, 100]).
+  const mat = new THREE.LineBasicMaterial({
+    vertexColors: true,
+    transparent: true,
+    opacity: 0.95,
+    depthWrite: false,
+    polygonOffset: true,
+    polygonOffsetFactor: -2,
+    polygonOffsetUnits: -2,
+  });
+  return new THREE.LineSegments(geom, mat);
 }

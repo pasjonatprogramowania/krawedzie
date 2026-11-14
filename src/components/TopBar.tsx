@@ -12,6 +12,7 @@ export interface TopBarProps {
   onReset: () => void; onSelectAll: () => void; onClearSelection: () => void;
   /** Eksport zablokowany — zaokrąglanie nie powiodło się. */
   exportBlocked: boolean; exportBlockedReason: string;
+  hasResult?: boolean;
 }
 
 const BTN =
@@ -23,7 +24,7 @@ export function TopBar(props: TopBarProps) {
   const {
     fileName, nozzleMm, onNozzleChange, radiusMm, radiusKind, radiusMinMm, radiusMaxMm,
     onRadiusChange, radiusWarning, onImportClick, onExportStl, onExportObj, onReset, onSelectAll,
-    onClearSelection, exportBlocked, exportBlockedReason,
+    onClearSelection, exportBlocked, exportBlockedReason, hasResult = false,
   } = props;
   const [menuOpen, setMenuOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
@@ -107,7 +108,7 @@ export function TopBar(props: TopBarProps) {
           type="button"
           onClick={onExportStl}
           disabled={exportBlocked}
-          title={exportBlocked ? exportBlockedReason : 'Pobierze model zaokrąglony'}
+          title={exportBlocked ? exportBlockedReason : hasResult ? 'Pobierz model zaokrąglony' : 'Pobierz model STL'}
           className={BTN_ACCENT}
         >
           <Download className="h-3.5 w-3.5" /> Pobierz STL

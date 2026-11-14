@@ -5,6 +5,7 @@ import {
   roundEdges,
   signedVolume,
 } from '../src/utils/meshProcessing.ts';
+import { buildClearanceGrid } from '../src/utils/meshClearance.ts';
 import type { MeshData } from '../src/utils/meshProcessing.ts';
 import { makeBox, makeLShape, bboxOf, manifoldReport, volumeOf } from './helpers.ts';
 
@@ -424,7 +425,13 @@ test('FILLET: dowolny kąt dwuścienny — powierzchnia to łuk o promieniu r (n
       taperEnds: false,
     });
 
-    const rEff = report.effectiveRadius;
+    // rFeat faktycznie użyty: limit kąta ostrego + clearance geometrii (per-krawędź).
+    const sinHalf = Math.sin(theta / 2);
+    const denom = 1 - sinHalf;
+    const rMaxAngle = denom > 1e-9 ? (r * sinHalf) / denom : r;
+    const grid = buildClearanceGrid(m);
+    const clearance = grid.edgeClearance(edge!.e);
+    const rEff = Math.min(r, rMaxAngle, Number.isFinite(clearance) && clearance > 0 ? clearance : Infinity);
     const axis = rEff / Math.sin(theta / 2);
     let maxErr = 0;
     let moved = 0;
@@ -440,8 +447,8 @@ test('FILLET: dowolny kąt dwuścienny — powierzchnia to łuk o promieniu r (n
       const rho = Math.abs(axis - t);
       maxErr = Math.max(maxErr, Math.abs(rho - rEff));
     }
-    assert.ok(moved > 0, `nie zmierzono żadnego wierzchołka łuku dla ${deg}° (rEff=${rEff})`);
-    assert.ok(maxErr < 1e-6, `kąt ${deg}°: max |rho − r| = ${maxErr}`);
+    assert.ok(moved > 0, `nie zmierzono żadnego wierzchołka łuku dla ${deg}° (rEff=${rEff}, clamp=${report.radiusClampReason})`);
+    assert.ok(maxErr < 1e-6, `kąt ${deg}°: max |rho - r| = ${maxErr}`);
   }
 });
 
@@ -561,4 +568,239 @@ test('BUDŻET: przekroczenie limitu trójkątów jest raportowane, a wynik pozos
     assert.equal(r.report.flippedFaceCount, 0);
     assert.equal(r.report.degenerateFaceCount, 0);
   }
+});
+
+test('CHAMFER: gęsta kostka c=2 — krawędź nie zapada się do 0 przy narożniku i nie ostrzega o łuku', () => {
+  const box = makeBox(20, 20, 20, 20);
+  const { mesh } = buildMeshFromRaw(box.positions, box.indices);
+  const edges = cubeEdges(mesh);
+  const { mesh: result, report } = roundEdges(mesh, {
+    radius: 2,
+    segments: 1,
+    kind: 'chamfer',
+    edgeIndices: edges.map((e) => e.index),
+  });
+  assert.equal(report.flippedFaceCount, 0);
+  assert.equal(report.degenerateFaceCount, 0);
+  assert.ok(
+    !report.warnings.some((w) => w.includes('Teoretyczna odchyłka łuku')),
+    `chamfer nie powinien ostrzegać o segmentach łuku: ${report.warnings.join(' | ')}`,
+  );
+  // Wzdłuż krawędzi x=10, y=10 od z=5 do z=10 każdy wierzchołek musi się wyraźnie cofnąć (brak zera przy z=8).
+  for (let z = 5; z <= 10; z++) {
+    let bestV = -1;
+    let bestD = Infinity;
+    for (let v = 0; v < mesh.vertexCount; v++) {
+      const d = Math.hypot(mesh.positions[3 * v] - 10, mesh.positions[3 * v + 1] - 10, mesh.positions[3 * v + 2] - z);
+      if (d < bestD) { bestD = d; bestV = v; }
+    }
+    const disp = Math.hypot(
+      result.positions[3 * bestV] - mesh.positions[3 * bestV],
+      result.positions[3 * bestV + 1] - mesh.positions[3 * bestV + 1],
+      result.positions[3 * bestV + 2] - mesh.positions[3 * bestV + 2],
+    );
+    assert.ok(disp >= 0.85, `z=${z}: przemieszczenie ${disp.toFixed(4)} mm (oczekiwano >= 0.85, brak zapadnięcia)`);
+  }
+});
+
+/** Przesuwa tablicę współrzędnych o (ox, oy, oz) i skleja dwa surowce w jedną siatkę trójkątów. */
+function concatShiftedRaw(
+  a: { positions: Float64Array; indices: Int32Array }, da: [number, number, number],
+  b: { positions: Float64Array; indices: Int32Array }, db: [number, number, number],
+) {
+  const va = a.positions.length / 3;
+  const positions = new Float64Array(a.positions.length + b.positions.length);
+  for (let i = 0; i < va; i++) {
+    positions[3 * i] = a.positions[3 * i] + da[0];
+    positions[3 * i + 1] = a.positions[3 * i + 1] + da[1];
+    positions[3 * i + 2] = a.positions[3 * i + 2] + da[2];
+  }
+  const vb = b.positions.length / 3;
+  for (let i = 0; i < vb; i++) {
+    positions[a.positions.length + 3 * i] = b.positions[3 * i] + db[0];
+    positions[a.positions.length + 3 * i + 1] = b.positions[3 * i + 1] + db[1];
+    positions[a.positions.length + 3 * i + 2] = b.positions[3 * i + 2] + db[2];
+  }
+  const indices = new Int32Array(a.indices.length + b.indices.length);
+  indices.set(a.indices, 0);
+  for (let i = 0; i < b.indices.length; i++) indices[a.indices.length + i] = b.indices[i] + va;
+  return { positions, indices };
+}
+
+test('FILLET: dwa stykające się bloki o współpłaszczyznowych ścianach — środek płaski bez rowka, końce zaokrąglone', () => {
+  // Różne subdiv (2 vs 3) gwarantują osobne krawędzie na ścianie styku x=0 (faces.length === 2).
+  const raw = concatShiftedRaw(makeBox(10, 10, 10, 2), [-5, 0, 0], makeBox(10, 10, 10, 3), [5, 0, 0]);
+  const { mesh } = buildMeshFromRaw(raw.positions, raw.indices);
+  const edges = cubeEdges(mesh);
+  const r = 1.5;
+
+  const { mesh: result, report } = roundEdges(mesh, {
+    radius: r,
+    segments: 3,
+    kind: 'fillet',
+    edgeIndices: edges.map((e) => e.index),
+  });
+
+  assert.equal(report.flippedFaceCount, 0);
+  assert.equal(report.degenerateFaceCount, 0);
+  // Wszystkie 20 krawędzi styku na x=0 pominięto (60 zaznaczonych -> 40 przetworzonych).
+  assert.equal(report.processedEdgeCount, 40);
+
+  // Na styku x≈0 z dala od podłużnych krawędzi zewnętrzne ściany z=±5 i y=±5 muszą
+  // pozostać płaskie — bez wklęsłego rowka V wzdłuż szwu (ignorujemy wewnętrzne ściany |nx|>0.9).
+  for (let f = 0; f < result.faceCount; f++) {
+    const nx = Math.abs(result.faceNormals[3 * f]);
+    if (nx > 0.9) continue;
+    const i0 = result.faces[3 * f], i1 = result.faces[3 * f + 1], i2 = result.faces[3 * f + 2];
+    const cx = (result.positions[3 * i0] + result.positions[3 * i1] + result.positions[3 * i2]) / 3;
+    const cy = (result.positions[3 * i0 + 1] + result.positions[3 * i1 + 1] + result.positions[3 * i2 + 1]) / 3;
+    const cz = (result.positions[3 * i0 + 2] + result.positions[3 * i1 + 2] + result.positions[3 * i2 + 2]) / 3;
+    if (Math.abs(cx) > 0.4) continue;
+    if (Math.abs(cy) < 2.2 && Math.abs(Math.abs(cz) - 5) < 0.8) {
+      for (const vi of [i0, i1, i2]) {
+        assert.ok(
+          Math.abs(Math.abs(result.positions[3 * vi + 2]) - 5) < 1e-3,
+          `rowek na szwie ściany z=±5 przy x=${cx.toFixed(3)}, z=${result.positions[3 * vi + 2].toFixed(4)}`,
+        );
+      }
+    }
+    if (Math.abs(cz) < 2.2 && Math.abs(Math.abs(cy) - 5) < 0.8) {
+      for (const vi of [i0, i1, i2]) {
+        assert.ok(
+          Math.abs(Math.abs(result.positions[3 * vi + 1]) - 5) < 1e-3,
+          `rowek na szwie ściany y=±5 przy x=${cx.toFixed(3)}, y=${result.positions[3 * vi + 1].toFixed(4)}`,
+        );
+      }
+    }
+  }
+
+  // Krawędź podłużna w środku (0, 5, 5) jest kontynuacją prostej -> promień cylindra r*(√2−1).
+  const midV = nearestVertexIndex(result, [0, 5, 5]);
+  const midP = vertexAt(result, midV);
+  const dCylMid = Math.hypot(Math.abs(midP[1]) - (5 - r), Math.abs(midP[2]) - (5 - r));
+  assert.ok(Math.abs(dCylMid - r) < 0.05, `środek (${midP.join(',')}) powinien leżeć na walcu r=${r}, dist=${dCylMid}`);
+
+  // Końce x = -10 i x = +10 są faktycznie zaokrąglone (brak ściany obok).
+  for (const sx of [-10, 10]) {
+    const endV = nearestVertexIndex(result, [sx, 5, 5]);
+    const endP = vertexAt(result, endV);
+    const disp = Math.hypot(endP[0] - sx, endP[1] - 5, endP[2] - 5);
+    assert.ok(disp >= r * (Math.sqrt(3) - 1) - 0.12, `koniec x=${sx} powinien być zaokrąglony, disp=${disp.toFixed(4)}`);
+  }
+});
+
+test('FILLET: kontynuacja prostej między dwoma połączonymi blokami — brak przewężenia na środku przy taperEnds=true', () => {
+  // Jednolity podział z przeliczeniem topologii po pozycjach (najpierw rozwijamy do zupy trójkątów)
+  // skleja wspólne narożniki na x=0 (szew ma faces.length===4, powłoki są osobne).
+  const raw = concatShiftedRaw(makeBox(10, 10, 10, 1), [-5, 0, 0], makeBox(10, 10, 10, 1), [5, 0, 0]);
+  const soup = new Float64Array(raw.indices.length * 3);
+  for (let i = 0; i < raw.indices.length; i++) {
+    const vi = raw.indices[i];
+    soup[3 * i] = raw.positions[3 * vi];
+    soup[3 * i + 1] = raw.positions[3 * vi + 1];
+    soup[3 * i + 2] = raw.positions[3 * vi + 2];
+  }
+  const { mesh } = buildMeshFromRaw(soup, null);
+  const longitudinal = cubeEdges(mesh).filter((e) => {
+    const dx = Math.abs(mesh.positions[3 * e.v1] - mesh.positions[3 * e.v0]);
+    return dx > 5;
+  });
+  assert.equal(longitudinal.length, 8);
+
+  const r = 1.5;
+  const { mesh: result, report } = roundEdges(mesh, {
+    radius: r,
+    segments: 3,
+    kind: 'fillet',
+    taperEnds: true,
+    edgeIndices: longitudinal.map((e) => e.index),
+  });
+  assert.equal(report.flippedFaceCount, 0);
+
+  // Na styku x=0 krawędź biegnie dalej prosto w drugim bloku -> pełny promień (brak wygaszenia do 0).
+  const midV = nearestVertexIndex(mesh, [0, 5, 5]);
+  const midDisp = Math.hypot(
+    result.positions[3 * midV] - mesh.positions[3 * midV],
+    result.positions[3 * midV + 1] - mesh.positions[3 * midV + 1],
+    result.positions[3 * midV + 2] - mesh.positions[3 * midV + 2],
+  );
+  assert.ok(
+    midDisp >= r * (Math.SQRT2 - 1) - 0.05,
+    `środek x=0 nie powinien się zwężać (disp=${midDisp.toFixed(4)}, oczekiwano ~${(r * (Math.SQRT2 - 1)).toFixed(4)})`,
+  );
+
+  // Zewnętrzne końce x=-10 i x=+10 wygasają do 0 (niezaznaczone poprzeczne).
+  for (const sx of [-10, 10]) {
+    const endV = nearestVertexIndex(mesh, [sx, 5, 5]);
+    const endDisp = Math.hypot(
+      result.positions[3 * endV] - mesh.positions[3 * endV],
+      result.positions[3 * endV + 1] - mesh.positions[3 * endV + 1],
+      result.positions[3 * endV + 2] - mesh.positions[3 * endV + 2],
+    );
+    assert.ok(endDisp < 1e-6, `wolny koniec x=${sx} powinien wygasnąć do 0, ma ${endDisp}`);
+  }
+});
+
+test('roundEdges: wąski trójkąt szpilkowy (igła STL) nie powoduje asymetrycznego zapadnięcia narożnika', () => {
+  // Kostka [-10,10]^3, na ścianie z=10 igła wychodząca z (-10,-10,10) skośnie w głąb ściany
+  // do dwóch blisko położonych punktów (-4.55, 10, 10) i (-4.45, 10, 10), tak by środki jej
+  // długich boków leżały po przeciwnych stronach progu cornerGuard = 2*0.49*r, dokładnie jak f163 w pranie.stl.
+  const tris: Array<[[number, number, number], [number, number, number], [number, number, number]]> = [
+    // z = -10 (dół)
+    [[-10, -10, -10], [10, 10, -10], [10, -10, -10]],
+    [[-10, -10, -10], [-10, 10, -10], [10, 10, -10]],
+    // z = 10 (góra ze skośną igłą z (-10,-10,10) do (-4.52,10,10) i (-4.48,10,10))
+    [[-10, -10, 10], [10, -10, 10], [-4.48, 10, 10]],
+    [[-10, -10, 10], [-4.48, 10, 10], [-4.52, 10, 10]],
+    [[-10, -10, 10], [-4.52, 10, 10], [-10, 10, 10]],
+    [[10, -10, 10], [10, 10, 10], [-4.48, 10, 10]],
+    // y = -10 (przód)
+    [[-10, -10, -10], [10, -10, -10], [10, -10, 10]],
+    [[-10, -10, -10], [10, -10, 10], [-10, -10, 10]],
+    // y = 10 (tył — dopasowane do (-4.52,10,10) i (-4.48,10,10))
+    [[-10, 10, -10], [-10, 10, 10], [-4.52, 10, 10]],
+    [[-10, 10, -10], [-4.52, 10, 10], [-4.48, 10, 10]],
+    [[-10, 10, -10], [-4.48, 10, 10], [10, 10, 10]],
+    [[-10, 10, -10], [10, 10, 10], [10, 10, -10]],
+    // x = -10 (lewo)
+    [[-10, -10, -10], [-10, -10, 10], [-10, 10, 10]],
+    [[-10, -10, -10], [-10, 10, 10], [-10, 10, -10]],
+    // x = 10 (prawo)
+    [[10, -10, -10], [10, 10, -10], [10, 10, 10]],
+    [[10, -10, -10], [10, 10, 10], [10, -10, 10]],
+  ];
+  const raw = new Float32Array(tris.length * 9);
+  let k = 0;
+  for (const t of tris) {
+    for (const p of t) {
+      raw[k++] = p[0];
+      raw[k++] = p[1];
+      raw[k++] = p[2];
+    }
+  }
+  const { mesh } = buildMeshFromRaw(raw, null);
+  const sharp = mesh.edges.filter((e) => e.normalAngle >= (30 * Math.PI) / 180).map((e) => e.index);
+  const { mesh: result, report } = roundEdges(mesh, {
+    radius: 1.4,
+    segments: 3,
+    kind: 'fillet',
+    edgeIndices: sharp,
+  });
+  assert.equal(report.flippedFaceCount, 0);
+  const vNeedleCorner = nearestVertexIndex(mesh, [-10, -10, 10]);
+  const vCleanCorner = nearestVertexIndex(mesh, [10, -10, 10]);
+  const dNeedle = Math.hypot(
+    result.positions[3 * vNeedleCorner] - mesh.positions[3 * vNeedleCorner],
+    result.positions[3 * vNeedleCorner + 1] - mesh.positions[3 * vNeedleCorner + 1],
+    result.positions[3 * vNeedleCorner + 2] - mesh.positions[3 * vNeedleCorner + 2],
+  );
+  const dClean = Math.hypot(
+    result.positions[3 * vCleanCorner] - mesh.positions[3 * vCleanCorner],
+    result.positions[3 * vCleanCorner + 1] - mesh.positions[3 * vCleanCorner + 1],
+    result.positions[3 * vCleanCorner + 2] - mesh.positions[3 * vCleanCorner + 2],
+  );
+  assert.ok(
+    Math.abs(dNeedle - dClean) < 0.05,
+    `narożnik przy igle powinien przesunąć się symetrycznie (dNeedle=${dNeedle.toFixed(4)}, dClean=${dClean.toFixed(4)})`,
+  );
 });

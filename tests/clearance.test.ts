@@ -158,3 +158,34 @@ test('clearance: brak NaN', () => {
     }
   }
 });
+
+// T6 -------------------------------------------------------------------------
+test('clearance: sąsiednie trójkąty stycznej ściany z szumem float32 nie zaniżają odstępu', () => {
+  const raw = makeBox(20, 20, 20, 4);
+  // Wprowadzamy mikroszum typowy dla float32 na wewnętrznych wierzchołkach ściany x = 10,
+  // żeby sąsiednie trójkąty tej samej płaskiej ściany miały dot(dir, n) ~ 1e-5.
+  for (let i = 0; i < raw.positions.length; i += 3) {
+    if (
+      Math.abs(raw.positions[i] - 10) < 1e-6 &&
+      Math.abs(raw.positions[i + 1]) < 9.5 &&
+      Math.abs(raw.positions[i + 2]) < 9.5
+    ) {
+      raw.positions[i] -= 1e-5;
+    }
+  }
+  const mesh = buildMeshFromRaw(raw.positions, raw.indices).mesh;
+  const grid = buildClearanceGrid(mesh);
+  const topRightEdges = mesh.edges.filter((e) => {
+    const [mx, , mz] = midpointOf(mesh, e);
+    return e.faces.length === 2 && e.normalAngle > 1.0 && Math.abs(mx - 10) < 1e-4 && Math.abs(mz - 10) < 1e-4;
+  });
+  assert.ok(topRightEdges.length > 0);
+  for (const edge of topRightEdges) {
+    const clearance = grid.edgeClearance(edge);
+    assert.ok(
+      clearance > 9.9,
+      `krawędź ${edge.index}: clearance = ${clearance}, oczekiwano ~10 (fałszywe muśnięcie ściany bocznej)`,
+    );
+  }
+});
+

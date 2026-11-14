@@ -15,4 +15,6 @@ import './clearance.test.ts';
 import './printability.test.ts';
 import './realmodels.test.ts';
 import './pipeline.test.ts';
+import './picking.test.ts';
+import './worker.test.ts';
 import './ui.test.ts';

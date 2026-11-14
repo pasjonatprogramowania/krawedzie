@@ -38,30 +38,6 @@ function meshOf(raw: RawMesh): MeshData {
   return buildTopology(welded.positions, welded.faces);
 }
 
-/**
- * Zostawia tylko trójkąty, których normalna spełnia warunek `keep(nz)`.
- * Normalną liczymy tu niezależnie (iloczyn wektorów), żeby test nie korzystał
- * z kodu produkcyjnego.
- */
-function shellWithNormalZ(raw: RawMesh, keep: (nz: number) => boolean): MeshData {
-  const kept: number[] = [];
-  for (let f = 0; f < raw.indices.length; f += 3) {
-    const a = raw.indices[f];
-    const b = raw.indices[f + 1];
-    const c = raw.indices[f + 2];
-    // Składowa Z normalnej zależy tylko od współrzędnych X/Y.
-    const ax = raw.positions[3 * a];
-    const ay = raw.positions[3 * a + 1];
-    const bx = raw.positions[3 * b];
-    const by = raw.positions[3 * b + 1];
-    const cx = raw.positions[3 * c];
-    const cy = raw.positions[3 * c + 1];
-    const nz = (bx - ax) * (cy - ay) - (by - ay) * (cx - ax);
-    if (keep(nz)) kept.push(a, b, c);
-  }
-  return buildTopology(raw.positions, Int32Array.from(kept));
-}
-
 test('profil drukarki: minimalny promień = 2 × dysza', () => {
   assert.deepEqual(defaultProfile(), { nozzleMm: 0.4, layerHeightMm: 0.2, walls: 2 });
 
@@ -94,51 +70,28 @@ test('dysze: dokładnie 11 wartości, 0.2…2.0', () => {
   }
 });
 
-test('nawisy: dach kopyłkowy ma nawisy, dno nie', () => {
-  // Każda bryła zamknięta ma co najmniej jedną ścianę skierowaną w dół
-  // (suma ważonych normalnych zamkniętej siatki jest zerowa), więc porównujemy
-  // same powierzchnie: dach = ściana w dół, dno = ściana ku górze.
-  const raw = extrudePolygon(SQUARE, 20);
-  const inverted = extrudePolygon(SQUARE, -20);
-
-  // Dach: ściana skierowana w dół (normalna -Z) — wymaga podparcia.
-  const roof = shellWithNormalZ(raw, (nz) => nz < 0);
-  const roofOverhangs = analyzeOverhangs(roof, 45);
-  assert.ok(roofOverhangs.length > 0, 'dach skierowany w dół musi być wykryty jako nawis');
-  for (const face of roofOverhangs) {
-    assert.ok(face.angleFromVerticalDeg > 90, `kąt dachu = ${face.angleFromVerticalDeg}`);
-  }
-
-  // Dno: ściana skierowana ku górze (normalna +Z) — drukuje się bez podparcia.
-  // W odwróconym odpowiedniku to jest jego dno (na dole bryły).
-  const floor = shellWithNormalZ(inverted, (nz) => nz > 0);
-  const floorOverhangs = analyzeOverhangs(floor, 45);
-  assert.equal(floorOverhangs.length, 0, 'dno skierowane ku górze nie jest nawisem');
+test('nawisy: powierzchnia w dół w powietrzu to nawis; bryła na stole nie', () => {
+  const inv = extrudePolygon(SQUARE, -20);
+  for (let i = 2; i < inv.positions.length; i += 3) inv.positions[i] += 25;
+  const mesh = meshOf(inv);
+  const downs = analyzeOverhangs(mesh, 45);
+  assert.ok(downs.length > 0, 'powierzchnia w dół w powietrzu musi być nawisem');
+  const ups = analyzeOverhangs(meshOf(extrudePolygon(SQUARE, 20)), 45);
+  assert.equal(ups.length, 0, 'bryła na stole bez nawisu w dół nie ma nawisów');
 });
 
-test('nawisy: raportowane pole jest dodatnie i zgodne z sumą pól ścian', () => {
+test('nawisy: prostopadłościan na stole bez nawisów; sufit w powietrzu jest nawisem', () => {
   const mesh = meshOf(extrudePolygon(SQUARE, 20));
-  const overhangs = analyzeOverhangs(mesh, 45);
-  assert.ok(overhangs.length > 0, 'pryzma ma ściany wymagające podparcia');
-
+  assert.equal(analyzeOverhangs(mesh, 45).length, 0, 'boki pionowe i dno na stole nie są nawisami');
+  const inv = extrudePolygon(SQUARE, -20);
+  for (let i = 2; i < inv.positions.length; i += 3) inv.positions[i] += 25;
+  const invMesh = meshOf(inv);
+  const invOverhangs = analyzeOverhangs(invMesh, 45);
+  assert.ok(invOverhangs.length > 0, 'sufit w powietrzu wymaga podparcia');
   let expected = 0;
-  let total = 0;
-  for (let f = 0; f < mesh.faceCount; f++) total += mesh.faceAreas[f];
-  for (const face of overhangs) {
-    assert.ok(
-      Math.abs(face.areaMm2 - mesh.faceAreas[face.faceIndex]) < 1e-12,
-      `pole ściany ${face.faceIndex} musi pochodzić z faceAreas`,
-    );
-    expected += mesh.faceAreas[face.faceIndex];
-  }
-  assert.ok(expected > 0, 'pole nawisów musi być dodatnie');
-  assert.ok(
-    Math.abs(overhangAreaMm2(mesh, 45) - expected) < 1e-9,
-    `overhangAreaMm2 = ${overhangAreaMm2(mesh, 45)}, suma pól = ${expected}`,
-  );
-  assert.ok(overhangAreaMm2(mesh, 45) <= total + 1e-12, 'pole nawisów nie przekracza pola bryły');
+  for (const face of invOverhangs) expected += face.areaMm2;
+  assert.ok(Math.abs(overhangAreaMm2(invMesh, 45) - expected) < 1e-9);
 });
-
 test('raport: promień poniżej minimum generuje ostrzeżenie po polsku', () => {
   const mesh = meshOf(extrudePolygon(SQUARE, 20));
   const profile = defaultProfile();
